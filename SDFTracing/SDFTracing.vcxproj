@@ -185,8 +185,8 @@ COPY /Y "$(ProjectDir)XUSG\Bin\$(Platform)\$(Configuration)\*.dll" "$(ProjectDir
   <ItemGroup>
     <None Include="Content\Shaders\BRDFModels.hlsli" />
     <None Include="Content\Shaders\D3DX_DXGIFormatConvert.inl" />
+    <None Include="Content\Shaders\MonteCarlo.hlsli" />
     <None Include="Content\Shaders\VertexLayout.hlsli" />
-    <None Include="MonteCarlo.hlsli" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -144,7 +144,7 @@
     <None Include="Content\Shaders\VertexLayout.hlsli">
       <Filter>Shaders</Filter>
     </None>
-    <None Include="MonteCarlo.hlsli">
+    <None Include="Content\Shaders\MonteCarlo.hlsli">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>
