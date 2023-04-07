@@ -1,0 +1,561 @@
+//*********************************************************
+//
+// Copyright (c) Microsoft. All rights reserved.
+// This code is licensed under the MIT License (MIT).
+// THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
+// ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY
+// IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
+// PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
+//
+//*********************************************************
+
+#include "SDFTracing.h"
+
+using namespace std;
+using namespace XUSG;
+using namespace XUSG::RayTracing;
+
+#define	PIDIV4 0.785398163f
+
+static const float g_FOVAngleY = PIDIV4;
+static const float g_zNear = 1.0f;
+static const float g_zFar = 100.0f;
+
+const auto g_backFormat = Format::R8G8B8A8_UNORM;
+
+AdaptiveDDGI::AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name) :
+	DXFramework(width, height, name),
+	m_isDxrSupported(false),
+	m_frameIndex(0),
+	m_viewport(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)),
+	m_scissorRect(0, 0, static_cast<long>(width), static_cast<long>(height)),
+	m_showFPS(true),
+	m_pausing(false),
+	m_tracking(false)
+{
+#if defined (_DEBUG)
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+	AllocConsole();
+	FILE* stream;
+	freopen_s(&stream, "CONIN$", "r+t", stdin);
+	freopen_s(&stream, "CONOUT$", "w+t", stdout);
+	freopen_s(&stream, "CONOUT$", "w+t", stderr);
+#endif
+
+	m_meshDescs =
+	{
+		{ "Assets/bunny_uv.gltf", XMFLOAT4(-1.6f, 0.0f, -0.5f, 0.3f), true },
+		{ "Assets/cornell_box1.gltf", XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f), false }
+	};
+}
+
+AdaptiveDDGI::~AdaptiveDDGI()
+{
+#if defined (_DEBUG)
+	FreeConsole();
+#endif
+}
+
+void AdaptiveDDGI::OnInit()
+{
+	LoadPipeline();
+	LoadAssets();
+}
+
+// Load the rendering pipeline dependencies.
+void AdaptiveDDGI::LoadPipeline()
+{
+	auto dxgiFactoryFlags = 0u;
+
+#if defined(_DEBUG)
+	// Enable the debug layer (requires the Graphics Tools "optional feature").
+	// NOTE: Enabling the debug layer after device creation will invalidate the active device.
+	{
+		ComPtr<ID3D12Debug1> debugController;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
+		{
+			debugController->EnableDebugLayer();
+			//debugController->SetEnableGPUBasedValidation(TRUE);
+
+			// Enable additional debug layers.
+			dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+		}
+	}
+#endif
+
+	ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&m_factory)));
+
+	DXGI_ADAPTER_DESC1 dxgiAdapterDesc;
+	com_ptr<IDXGIAdapter1> dxgiAdapter;
+	auto hr = DXGI_ERROR_UNSUPPORTED;
+	const auto createDeviceFlags = EnableRootDescriptorsInShaderRecords;
+	for (auto i = 0u; hr == DXGI_ERROR_UNSUPPORTED; ++i)
+	{
+		dxgiAdapter = nullptr;
+		ThrowIfFailed(m_factory->EnumAdapters1(i, &dxgiAdapter));
+		//EnableDirectXRaytracing(dxgiAdapter.get());
+
+		m_device = RayTracing::Device::MakeUnique();
+		hr = m_device->Create(dxgiAdapter.get(), D3D_FEATURE_LEVEL_11_0);
+		XUSG_N_RETURN(m_device->CreateInterface(createDeviceFlags), ThrowIfFailed(E_FAIL));
+	}
+
+	dxgiAdapter->GetDesc1(&dxgiAdapterDesc);
+	if (dxgiAdapterDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+		m_title += dxgiAdapterDesc.VendorId == 0x1414 && dxgiAdapterDesc.DeviceId == 0x8c ? L" (WARP)" : L" (Software)";
+	ThrowIfFailed(hr);
+
+	// Create the command queue.
+	m_commandQueue = CommandQueue::MakeUnique();
+	XUSG_N_RETURN(m_commandQueue->Create(m_device.get(), CommandListType::DIRECT, CommandQueueFlag::NONE,
+		0, 0, L"CommandQueue"), ThrowIfFailed(E_FAIL));
+
+	// Create the swap chain.
+	CreateSwapchain();
+
+	m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+
+	// Create frame resources.
+	// Create a RTV and a command allocator for each frame.
+	for (uint8_t n = 0; n < FrameCount; ++n)
+	{
+		m_renderTargets[n] = RenderTarget::MakeUnique();
+		XUSG_N_RETURN(m_renderTargets[n]->CreateFromSwapChain(m_device.get(), m_swapChain.get(), n), ThrowIfFailed(E_FAIL));
+
+		m_commandAllocators[n] = CommandAllocator::MakeUnique();
+		XUSG_N_RETURN(m_commandAllocators[n]->Create(m_device.get(), CommandListType::DIRECT,
+			(L"CommandAllocator" + to_wstring(n)).c_str()), ThrowIfFailed(E_FAIL));
+	}
+}
+
+// Load the sample assets.
+void AdaptiveDDGI::LoadAssets()
+{
+	// Create the command list.
+	const auto commandList = RayTracing::CommandList::MakeUnique();
+	XUSG_N_RETURN(commandList->Create(m_device.get(), 0, CommandListType::DIRECT,
+		m_commandAllocators[m_frameIndex].get(), nullptr), ThrowIfFailed(E_FAIL));
+
+	// Create ray tracing interfaces
+	XUSG_N_RETURN(commandList->CreateInterface(), ThrowIfFailed(E_FAIL));
+
+	// TODO: create m_commandListEZ.
+	const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = { 4, 1, 0, 0, 0, 3 };
+	m_commandList = RayTracing::EZ::CommandList::MakeUnique();
+	const auto pCommandList = m_commandList.get();
+	XUSG_N_RETURN(pCommandList->Create(commandList.get(), 2, 48, nullptr,
+		nullptr, nullptr, nullptr, nullptr, maxSrvSpaces), ThrowIfFailed(E_FAIL));
+
+	const auto meshCount = static_cast<uint32_t>(m_meshDescs.size());
+	vector<Resource::uptr> uploaders(0);
+	vector<GeometryBuffer> geometries(meshCount);
+
+	m_renderer = make_unique<Renderer>();
+	XUSG_N_RETURN(m_renderer->Init(pCommandList, uploaders, meshCount, geometries.data(),
+		m_meshDescs.data()), ThrowIfFailed(E_FAIL));
+
+	// Close the command list and execute it to begin the initial GPU setup.
+	XUSG_N_RETURN(pCommandList->Close(), ThrowIfFailed(E_FAIL));
+	m_commandQueue->ExecuteCommandList(pCommandList->AsRTCommandList());
+
+	// Create synchronization objects and wait until assets have been uploaded to the GPU.
+	{
+		if (!m_fence)
+		{
+			m_fence = Fence::MakeUnique();
+			XUSG_N_RETURN(m_fence->Create(m_device.get(), m_fenceValues[m_frameIndex]++, FenceFlag::NONE, L"Fence"), ThrowIfFailed(E_FAIL));
+		}
+
+		// Create an event handle to use for frame synchronization.
+		m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+		if (!m_fenceEvent) ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
+
+		// Wait for the command list to execute; we are reusing the same command 
+		// list in our main loop but for now, we just want to wait for setup to 
+		// complete before continuing.
+		WaitForGpu();
+	}
+
+	// Create window size dependent resources.
+	CreateResources();
+
+	// Projection
+	const auto aspectRatio = m_width / static_cast<float>(m_height);
+	const auto proj = XMMatrixPerspectiveFovLH(g_FOVAngleY, aspectRatio, g_zNear, g_zFar);
+	XMStoreFloat4x4(&m_proj, proj);
+
+	// View initialization
+	m_focusPt = XMFLOAT3(0.0f, 4.5f, 0.0f);
+	m_eyePt = XMFLOAT3(8.0f, 12.0f, -16.0f);
+	const auto focusPt = XMLoadFloat3(&m_focusPt);
+	const auto eyePt = XMLoadFloat3(&m_eyePt);
+	const auto view = XMMatrixLookAtLH(eyePt, focusPt, XMVectorSet(0.0f, 1.0f, 0.0f, 1.0f));
+	XMStoreFloat4x4(&m_view, view);
+}
+
+void AdaptiveDDGI::CreateSwapchain()
+{
+	// Describe and create the swap chain.
+	m_swapChain = SwapChain::MakeUnique();
+	XUSG_N_RETURN(m_swapChain->Create(m_factory.get(), Win32Application::GetHwnd(), m_commandQueue->GetHandle(),
+		FrameCount, m_width, m_height, g_backFormat, SwapChainFlag::ALLOW_TEARING), ThrowIfFailed(E_FAIL));
+
+	// This class does not support exclusive full-screen mode and prevents DXGI from responding to the ALT+ENTER shortcut.
+	ThrowIfFailed(m_factory->MakeWindowAssociation(Win32Application::GetHwnd(), DXGI_MWA_NO_ALT_ENTER));
+}
+
+void AdaptiveDDGI::CreateResources()
+{
+	// Obtain the back buffers for this window which will be the final render targets
+	// and create render target views for each of them.
+	for (uint8_t n = 0; n < FrameCount; ++n)
+	{
+		m_renderTargets[n] = RenderTarget::MakeUnique();
+		XUSG_N_RETURN(m_renderTargets[n]->CreateFromSwapChain(m_device.get(), m_swapChain.get(), n), ThrowIfFailed(E_FAIL));
+	}
+
+	// Create a DSV
+	m_depth = DepthStencil::MakeUnique();
+	XUSG_N_RETURN(m_depth->Create(m_device.get(), m_width, m_height, Format::D24_UNORM_S8_UINT,
+		ResourceFlag::DENY_SHADER_RESOURCE), ThrowIfFailed(E_FAIL));
+
+	m_renderer->SetViewport(m_width, m_height);
+}
+
+// Update frame-based values.
+void AdaptiveDDGI::OnUpdate()
+{
+	// Timer
+	static auto time = 0.0, pauseTime = 0.0;
+
+	m_timer.Tick();
+	const auto totalTime = CalculateFrameStats();
+	pauseTime = m_pausing ? totalTime - time : pauseTime;
+	time = totalTime - pauseTime;
+
+	// View
+	const auto eyePt = XMLoadFloat3(&m_eyePt);
+	const auto view = XMLoadFloat4x4(&m_view);
+	const auto proj = XMLoadFloat4x4(&m_proj);
+
+	m_renderer->UpdateFrame(m_frameIndex, eyePt, view * proj);
+}
+
+// Render the scene.
+void AdaptiveDDGI::OnRender()
+{
+	// Record all the commands we need to render the scene into the command list.
+	PopulateCommandList();
+
+	// Execute the command list.
+	m_commandQueue->ExecuteCommandList(m_commandList->AsRTCommandList());
+
+	// Present the frame.
+	XUSG_N_RETURN(m_swapChain->Present(0, PresentFlag::ALLOW_TEARING), ThrowIfFailed(E_FAIL));
+
+	MoveToNextFrame();
+}
+
+void AdaptiveDDGI::OnDestroy()
+{
+	// Ensure that the GPU is no longer referencing resources that are about to be
+	// cleaned up by the destructor.
+	WaitForGpu();
+
+	CloseHandle(m_fenceEvent);
+}
+
+void AdaptiveDDGI::OnWindowSizeChanged(int width, int height)
+{
+	if (!Win32Application::GetHwnd())
+	{
+		throw std::exception("Call SetWindow with a valid Win32 window handle");
+	}
+
+	// Wait until all previous GPU work is complete.
+	WaitForGpu();
+
+	// Release resources that are tied to the swap chain and update fence values.
+	for (uint8_t n = 0; n < FrameCount; ++n)
+	{
+		m_renderTargets[n].reset();
+		m_fenceValues[n] = m_fenceValues[m_frameIndex];
+	}
+	m_commandList->Resize();
+
+	// Determine the render target size in pixels.
+	m_width = (max)(width, 1);
+	m_height = (max)(height, 1);
+
+	// If the swap chain already exists, resize it, otherwise create one.
+	if (m_swapChain)
+	{
+		// If the swap chain already exists, resize it.
+		const auto hr = m_swapChain->ResizeBuffers(FrameCount, m_width, m_height, g_backFormat, SwapChainFlag::ALLOW_TEARING);
+
+		if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+		{
+#ifdef _DEBUG
+			char buff[64] = {};
+			sprintf_s(buff, "Device Lost on ResizeBuffers: Reason code 0x%08X\n", (hr == DXGI_ERROR_DEVICE_REMOVED) ? m_device->GetDeviceRemovedReason() : hr);
+			OutputDebugStringA(buff);
+#endif
+			// If the device was removed for any reason, a new device and swap chain will need to be created.
+			//HandleDeviceLost();
+
+			// Everything is set up now. Do not continue execution of this method. HandleDeviceLost will reenter this method 
+			// and correctly set up the new device.
+			return;
+		}
+		else
+		{
+			ThrowIfFailed(hr);
+		}
+	}
+	else CreateSwapchain();
+
+	// Reset the index to the current back buffer.
+	m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+
+	// Create window size dependent resources.
+	CreateResources();
+
+	// Projection
+	{
+		const auto aspectRatio = m_width / static_cast<float>(m_height);
+		const auto proj = XMMatrixPerspectiveFovLH(g_FOVAngleY, aspectRatio, g_zNear, g_zFar);
+		XMStoreFloat4x4(&m_proj, proj);
+	}
+}
+
+// User hot-key interactions.
+void AdaptiveDDGI::OnKeyUp(uint8_t key)
+{
+	switch (key)
+	{
+	case VK_SPACE:
+		m_pausing = !m_pausing;
+		break;
+	case VK_F1:
+		m_showFPS = !m_showFPS;
+		break;
+	}
+}
+
+// User camera interactions.
+void AdaptiveDDGI::OnLButtonDown(float posX, float posY)
+{
+	m_tracking = true;
+	m_mousePt = XMFLOAT2(posX, posY);
+}
+
+void AdaptiveDDGI::OnLButtonUp(float posX, float posY)
+{
+	m_tracking = false;
+}
+
+void AdaptiveDDGI::OnMouseMove(float posX, float posY)
+{
+	if (m_tracking)
+	{
+		const auto dPos = XMFLOAT2(m_mousePt.x - posX, m_mousePt.y - posY);
+
+		XMFLOAT2 radians;
+		radians.x = XM_2PI * dPos.y / m_height;
+		radians.y = XM_2PI * dPos.x / m_width;
+
+		const auto focusPt = XMLoadFloat3(&m_focusPt);
+		auto eyePt = XMLoadFloat3(&m_eyePt);
+
+		const auto len = XMVectorGetX(XMVector3Length(focusPt - eyePt));
+		auto transform = XMMatrixTranslation(0.0f, 0.0f, -len);
+		transform *= XMMatrixRotationRollPitchYaw(radians.x, radians.y, 0.0f);
+		transform *= XMMatrixTranslation(0.0f, 0.0f, len);
+
+		const auto view = XMLoadFloat4x4(&m_view) * transform;
+		const auto viewInv = XMMatrixInverse(nullptr, view);
+		eyePt = viewInv.r[3];
+
+		XMStoreFloat3(&m_eyePt, eyePt);
+		XMStoreFloat4x4(&m_view, view);
+
+		m_mousePt = XMFLOAT2(posX, posY);
+	}
+}
+
+void AdaptiveDDGI::OnMouseWheel(float deltaZ, float posX, float posY)
+{
+	const auto focusPt = XMLoadFloat3(&m_focusPt);
+	auto eyePt = XMLoadFloat3(&m_eyePt);
+
+	const auto len = XMVectorGetX(XMVector3Length(focusPt - eyePt));
+	const auto transform = XMMatrixTranslation(0.0f, 0.0f, -len * deltaZ / 16.0f);
+
+	const auto view = XMLoadFloat4x4(&m_view) * transform;
+	const auto viewInv = XMMatrixInverse(nullptr, view);
+	eyePt = viewInv.r[3];
+
+	XMStoreFloat3(&m_eyePt, eyePt);
+	XMStoreFloat4x4(&m_view, view);
+}
+
+void AdaptiveDDGI::OnMouseLeave()
+{
+	m_tracking = false;
+}
+
+void AdaptiveDDGI::ParseCommandLineArgs(wchar_t* argv[], int argc)
+{
+	DXFramework::ParseCommandLineArgs(argv, argc);
+
+	//for (auto i = 1; i < argc; ++i)
+	//{
+	//	if (wcsncmp(argv[i], L"-mesh", wcslen(argv[i])) == 0 ||
+	//		wcsncmp(argv[i], L"/mesh", wcslen(argv[i])) == 0)
+	//	{
+	//		if (i + 1 < argc)
+	//		{
+	//			m_meshFileName.resize(wcslen(argv[++i]));
+	//			for (size_t j = 0; j < m_meshFileName.size(); ++j)
+	//				m_meshFileName[j] = static_cast<char>(argv[i][j]);
+	//		}
+	//	}
+	//}
+}
+
+void AdaptiveDDGI::PopulateCommandList()
+{
+	// Command list allocators can only be reset when the associated 
+	// command lists have finished execution on the GPU; apps should use 
+	// fences to determine GPU execution progress.
+	const auto pCommandAllocator = m_commandAllocators[m_frameIndex].get();
+	XUSG_N_RETURN(pCommandAllocator->Reset(), ThrowIfFailed(E_FAIL));
+
+	// However, when ExecuteCommandList() is called on a particular command 
+	// list, that command list can then be reset at any time and must be before 
+	// re-recording.
+	const auto pCommandList = m_commandList.get();
+	XUSG_N_RETURN(pCommandList->Reset(pCommandAllocator, nullptr), ThrowIfFailed(E_FAIL));
+
+	// Voxelizer rendering
+	const auto renderTarget = m_renderTargets[m_frameIndex].get();
+	m_renderer->Render(pCommandList, m_frameIndex, renderTarget, m_depth.get());
+
+	XUSG_N_RETURN(pCommandList->Close(renderTarget), ThrowIfFailed(E_FAIL));
+}
+
+// Wait for pending GPU work to complete.
+void AdaptiveDDGI::WaitForGpu()
+{
+	// Schedule a Signal command in the queue.
+	XUSG_N_RETURN(m_commandQueue->Signal(m_fence.get(), m_fenceValues[m_frameIndex]), ThrowIfFailed(E_FAIL));
+
+	// Wait until the fence has been processed, and increment the fence value for the current frame.
+	XUSG_N_RETURN(m_fence->SetEventOnCompletion(m_fenceValues[m_frameIndex]++, m_fenceEvent), ThrowIfFailed(E_FAIL));
+	WaitForSingleObject(m_fenceEvent, INFINITE);
+}
+
+// Prepare to render the next frame.
+void AdaptiveDDGI::MoveToNextFrame()
+{
+	// Schedule a Signal command in the queue.
+	const auto currentFenceValue = m_fenceValues[m_frameIndex];
+	XUSG_N_RETURN(m_commandQueue->Signal(m_fence.get(), currentFenceValue), ThrowIfFailed(E_FAIL));
+
+	// Update the frame index.
+	m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+
+	// If the next frame is not ready to be rendered yet, wait until it is ready.
+	if (m_fence->GetCompletedValue() < m_fenceValues[m_frameIndex])
+	{
+		XUSG_N_RETURN(m_fence->SetEventOnCompletion(m_fenceValues[m_frameIndex], m_fenceEvent), ThrowIfFailed(E_FAIL));
+		WaitForSingleObject(m_fenceEvent, INFINITE);
+	}
+
+	// Set the fence value for the next frame.
+	m_fenceValues[m_frameIndex] = currentFenceValue + 1;
+}
+
+double AdaptiveDDGI::CalculateFrameStats(float* pTimeStep)
+{
+	static int frameCnt = 0;
+	static double elapsedTime = 0.0;
+	static double previousTime = 0.0;
+	const auto totalTime = m_timer.GetTotalSeconds();
+	++frameCnt;
+
+	const auto timeStep = static_cast<float>(totalTime - elapsedTime);
+
+	// Compute averages over one second period.
+	if ((totalTime - elapsedTime) >= 1.0f)
+	{
+		float fps = static_cast<float>(frameCnt) / timeStep;	// Normalize to an exact second.
+
+		frameCnt = 0;
+		elapsedTime = totalTime;
+
+		wstringstream windowText;
+		windowText << L"    fps: ";
+		if (m_showFPS) windowText << setprecision(2) << fixed << fps;
+		else windowText << L"[F1]";
+
+		SetCustomWindowText(windowText.str().c_str());
+	}
+
+	if (pTimeStep)*pTimeStep = static_cast<float>(totalTime - previousTime);
+	previousTime = totalTime;
+
+	return totalTime;
+}
+
+//--------------------------------------------------------------------------------------
+// Ray tracing
+//--------------------------------------------------------------------------------------
+
+// Enable experimental features required for compute-based raytracing fallback.
+// This will set active D3D12 devices to DEVICE_REMOVED state.
+// Returns bool whether the call succeeded and the device supports the feature.
+inline bool EnableComputeRaytracingFallback(IDXGIAdapter1* adapter)
+{
+	ComPtr<ID3D12Device> testDevice;
+	UUID experimentalFeatures[] = { D3D12ExperimentalShaderModels };
+
+	return SUCCEEDED(D3D12EnableExperimentalFeatures(1, experimentalFeatures, nullptr, nullptr))
+		&& SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&testDevice)));
+}
+
+// Returns bool whether the device supports DirectX Raytracing tier.
+inline bool IsDirectXRaytracingSupported(IDXGIAdapter1* adapter)
+{
+	ComPtr<ID3D12Device> testDevice;
+	D3D12_FEATURE_DATA_D3D12_OPTIONS5 featureSupportData = {};
+
+	return SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&testDevice)))
+		&& SUCCEEDED(testDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &featureSupportData, sizeof(featureSupportData)))
+		&& featureSupportData.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
+}
+
+void AdaptiveDDGI::EnableDirectXRaytracing(IDXGIAdapter1* adapter)
+{
+	// Fallback Layer uses an experimental feature and needs to be enabled before creating a D3D12 device.
+	bool isFallbackSupported = EnableComputeRaytracingFallback(adapter);
+
+	if (!isFallbackSupported)
+	{
+		OutputDebugString(
+			L"Warning: Could not enable Compute Raytracing Fallback (D3D12EnableExperimentalFeatures() failed).\n" \
+			L"         Possible reasons: your OS is not in developer mode.\n\n");
+	}
+
+	m_isDxrSupported = IsDirectXRaytracingSupported(adapter);
+
+	if (!m_isDxrSupported)
+	{
+		OutputDebugString(L"Warning: DirectX Raytracing is not supported by your GPU and driver.\n\n");
+
+		if (!isFallbackSupported)
+			OutputDebugString(L"Could not enable compute based fallback raytracing support (D3D12EnableExperimentalFeatures() failed).\n"\
+				L"Possible reasons: your OS is not in developer mode.\n\n");
+		ThrowIfFailed(isFallbackSupported ? S_OK : E_FAIL);
+	}
+}
