@@ -70,7 +70,9 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray)
 	return float3(t, r, ao);
 }
 
+//--------------------------------------------------------------------------------------
 // https://www.shadertoy.com/view/4sdGWN
+//--------------------------------------------------------------------------------------
 float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 {
 	const uint n = 32;
@@ -92,7 +94,7 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 		const float3 uvw = pos * 0.5 + 0.5;
 		const float r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
 
-		occ += (t - max(r, 0.0)) / ray.TMax * falloff;
+		occ += (t - max(r, 0.0)) / lMax * falloff;
 	}
 
 	const float ao = saturate(1.0 - occ * nInv);
@@ -119,7 +121,7 @@ min16float4 main(PSIn input) : SV_TARGET
 	const float3 tr = TraceAO(g_txSDF, ray);
 #else
 	ray.TMin = 0.0;
-	ray.TMax = 4.0;
+	ray.TMax = g_volumeWorld[1].y * 0.4;
 
 	const float3 tr = TraceAO(g_txSDF, ray, 2.2);
 #endif
