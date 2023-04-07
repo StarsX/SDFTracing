@@ -3,6 +3,7 @@
 //--------------------------------------------------------------------------------------
 
 #include "SharedConst.h"
+#include "MonteCarlo.hlsli"
 
 #define FLT_MAX 3.402823466e+38 // max value
 
@@ -37,7 +38,7 @@ cbuffer cbPerFrame
 //};
 
 //--------------------------------------------------------------------------------------
-// Textures and sampler
+// Texture and sampler
 //--------------------------------------------------------------------------------------
 Texture3D<float> g_txSDF;
 
@@ -69,6 +70,36 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray)
 	return float3(t, r, ao);
 }
 
+// https://www.shadertoy.com/view/4sdGWN
+float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
+{
+	const uint n = 32;
+	const float nInv = 1.0 / n;
+	const float rad = 1.0 - nInv; // Hemispherical factor (self occlusion correction)
+	const float lMax = ray.TMax - ray.TMin;
+
+	float t = ray.TMin, r = 0.0;
+	float occ = 0.0;
+	for (uint i = 0; i < n; ++i)
+	{
+		t = ray.TMin + hash(i) * lMax;
+		const float2 xi = float2(hash(t + 1.0), hash(t + 2.0));
+		const float3 dir = normalize(ray.Direction + computeDirectionHS(ray.Direction, xi) * rad); // mix direction with the normal
+
+		float3 pos = ray.Origin + t * dir;
+		pos = mul(float4(pos, 1.0), g_volumeWorldI);
+
+		const float3 uvw = pos * 0.5 + 0.5;
+		const float r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
+
+		occ += (t - max(r, 0.0)) / ray.TMax * falloff;
+	}
+
+	const float ao = saturate(1.0 - occ * nInv);
+
+	return float3(t, r, ao);
+}
+
 min16float4 main(PSIn input) : SV_TARGET
 {
 	//float3 gridSize;
@@ -81,11 +112,18 @@ min16float4 main(PSIn input) : SV_TARGET
 	RayDesc ray;
 	ray.Origin = input.PosW;
 	ray.Direction = normalize(input.Nrm);
+#if 0
 	ray.TMin = 1e-3;
 	ray.TMax = 100.0;
 
 	const float3 tr = TraceAO(g_txSDF, ray);
-	const min16float ambient = PI;
+#else
+	ray.TMin = 0.0;
+	ray.TMax = 4.0;
+
+	const float3 tr = TraceAO(g_txSDF, ray, 2.2);
+#endif
+	const min16float ambient = PI * 2.0;
 	const min16float ao = min16float(tr.z);
 	const min16float3 result = input.Albedo / PI * ambient * ao + input.Emissive;
 
