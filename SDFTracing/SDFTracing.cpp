@@ -219,7 +219,7 @@ void AdaptiveDDGI::CreateResources()
 	XUSG_N_RETURN(m_depth->Create(m_device.get(), m_width, m_height, Format::D24_UNORM_S8_UINT,
 		ResourceFlag::DENY_SHADER_RESOURCE), ThrowIfFailed(E_FAIL));
 
-	m_renderer->SetViewport(m_width, m_height);
+	XUSG_N_RETURN(m_renderer->SetViewport(m_device.get(), m_width, m_height), ThrowIfFailed(E_FAIL));
 }
 
 // Update frame-based values.

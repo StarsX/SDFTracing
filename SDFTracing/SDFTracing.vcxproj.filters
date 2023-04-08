@@ -124,13 +124,16 @@
     <FxCompile Include="Content\Shaders\VSScreenQuad.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
-    <FxCompile Include="Content\Shaders\PSDrawMesh.hlsl">
-      <Filter>Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="Content\Shaders\VSDrawMesh.hlsl">
+    <FxCompile Include="Content\Shaders\PSShade.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
     <FxCompile Include="Content\Shaders\CSBuildSDF.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Content\Shaders\PSVisibility.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Content\Shaders\VSVisibility.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
   </ItemGroup>
@@ -145,6 +148,9 @@
       <Filter>Shaders</Filter>
     </None>
     <None Include="Content\Shaders\MonteCarlo.hlsli">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="Content\Shaders\DecodeVisibility.hlsli">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>

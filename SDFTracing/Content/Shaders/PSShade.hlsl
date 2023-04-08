@@ -3,6 +3,7 @@
 //--------------------------------------------------------------------------------------
 
 #include "SharedConst.h"
+#include "DecodeVisibility.hlsli"
 #include "MonteCarlo.hlsli"
 
 #define FLT_MAX 3.402823466e+38 // max value
@@ -12,12 +13,8 @@
 //--------------------------------------------------------------------------------------
 struct PSIn
 {
-	float4	Pos		: SV_POSITION;
-	float3	Nrm		: NORMAL;
-	float3	PosW	: POSWORLD;
-	float2	UV		: TEXCOORD;
-	min16float3	Albedo : COLOR;
-	min16float3	Emissive : EMISSIVE;
+	float4	Pos	: SV_POSITION;
+	float2	UV : TEXCOORD;
 };
 
 //--------------------------------------------------------------------------------------
@@ -30,17 +27,10 @@ cbuffer cbPerFrame
 	float4x3 g_volumeWorldI;
 };
 
-//cbuffer cbPerObject
-//{
-//	float4x3	g_world;
-//	float3x3	g_worldIT;
-//	uint		g_meshId;
-//};
-
 //--------------------------------------------------------------------------------------
 // Texture and sampler
 //--------------------------------------------------------------------------------------
-Texture3D<float> g_txSDF;
+Texture3D<float> g_txSDF : register (t2, space0);
 
 SamplerState g_sampler;
 
@@ -104,6 +94,9 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 
 min16float4 main(PSIn input) : SV_TARGET
 {
+	const Attrib attrib = GetPixelAttrib(input.Pos.xy, input.UV, g_viewProj);
+	if (attrib.MeshId == 0xffffffff) discard;
+
 	//float3 gridSize;
 	//g_txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
 
@@ -111,9 +104,11 @@ min16float4 main(PSIn input) : SV_TARGET
 	//voxelVec = abs(mul(voxelVec, (float3x3)g_volumeWorld));
 	//const float voxel = max(max(voxelVec.x, voxelVec.y), voxelVec.z);
 
+	const PerObject matrices = g_matrices[attrib.MeshId];
+
 	RayDesc ray;
-	ray.Origin = input.PosW;
-	ray.Direction = normalize(input.Nrm);
+	ray.Origin = mul(float4(attrib.Pos, 1.0), matrices.World);
+	ray.Direction = normalize(mul(attrib.Nrm, (float3x3)matrices.WorldIT));
 #if 0
 	ray.TMin = 1e-3;
 	ray.TMax = 100.0;
@@ -125,9 +120,12 @@ min16float4 main(PSIn input) : SV_TARGET
 
 	const float3 tr = TraceAO(g_txSDF, ray, 2.2);
 #endif
+
 	const min16float ambient = PI * 2.0;
+	const min16float3 albedo = attrib.Emissive > 0.0 ? 0.0 : attrib.Color;
+	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
 	const min16float ao = min16float(tr.z);
-	const min16float3 result = input.Albedo / PI * ambient * ao + input.Emissive;
+	const min16float3 result = albedo / PI * ambient * ao + emissive;
 
 	return min16float4(result / (result + 0.5), 1.0);
 	//return min16float4(input.Albedo + input.Emissive, 1.0);

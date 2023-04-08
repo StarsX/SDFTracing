@@ -24,8 +24,8 @@ public:
 
 	bool Init(XUSG::RayTracing::EZ::CommandList* pCommandList, std::vector<XUSG::Resource::uptr>& uploaders,
 		uint32_t meshCount, XUSG::RayTracing::GeometryBuffer* pGeometries, const MeshDesc* pMeshDescs);
+	bool SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t height);
 
-	void SetViewport(uint32_t width, uint32_t height);
 	void UpdateFrame(uint8_t frameIndex, DirectX::CXMVECTOR eyePt, DirectX::CXMMATRIX viewProj);
 	void Render(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex,
 		XUSG::RenderTarget* pRenderTarget, XUSG::DepthStencil* pDepthStencil);
@@ -66,8 +66,8 @@ protected:
 		XUSG::RayTracing::GeometryBuffer* pGeometries);
 
 	void buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
-	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, uint8_t pingpong,
-		XUSG::RenderTarget* pRenderTarget, XUSG::DepthStencil* pDepthStencil);
+	void visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::DepthStencil* pDepthStencil);
+	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::RenderTarget* pRenderTarget);
 
 	void calcMeshWorldAABB(DirectX::XMVECTOR pAABB[2], uint32_t meshId) const;
 
@@ -80,7 +80,9 @@ protected:
 	XUSG::RayTracing::TopLevelAS::uptr m_topLevelAS;
 	XUSG::Resource::uptr		m_instances;
 	XUSG::Texture3D::uptr		m_globalSDF;
+	XUSG::RenderTarget::uptr	m_visibility;
 	XUSG::ConstantBuffer::uptr	m_cbPerFrame;
+	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
 	XUSG::StructuredBuffer::uptr m_lightSources[FrameCount];
 	XUSG::StructuredBuffer::uptr m_dynamicMeshList;
 
@@ -88,10 +90,11 @@ protected:
 	{
 		CS_BUILD_SDF,
 
+		VS_VISIBILITY,
 		VS_SCREEN_QUAD,
-		VS_DRAW_MESH,
 
-		PS_DRAW_MESH,
+		PS_VISIBILITY,
+		PS_SHADE,
 
 		NUM_SHADER
 	};

@@ -2,24 +2,20 @@
 // Copyright (c) XU, Tianchen. All rights reserved.
 //--------------------------------------------------------------------------------------
 
+#include "DecodeVisibility.hlsli"
+
 //--------------------------------------------------------------------------------------
-// Structure
+// Constant buffer
 //--------------------------------------------------------------------------------------
-struct VSOut
+cbuffer cbPerObject
 {
-	float4	Pos	: SV_POSITION;
-	float2	UV : TEXCOORD;
+	uint g_meshId;
 };
 
 //--------------------------------------------------------------------------------------
-// Vertex shader used for screen-space post-processing
+// Base visiblity-buffer pass
 //--------------------------------------------------------------------------------------
-VSOut main(uint vid : SV_VERTEXID)
+uint main(uint primitiveId : SV_PrimitiveID) : SV_TARGET
 {
-	VSOut output;
-
-	output.UV = float2((vid << 1) & 2, vid & 2);
-	output.Pos = float4(output.UV * float2(2.0, -2.0) + float2(-1.0, 1.0), 1.0.xx);
-
-	return output;
+	return ((g_meshId << PRIMITIVE_BITS) | primitiveId) + 1;
 }

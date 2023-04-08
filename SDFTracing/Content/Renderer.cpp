@@ -12,26 +12,18 @@ using namespace XUSG::RayTracing;
 
 #define GRID_SIZE 128
 
-struct CBPerObject
-{
-	DirectX::XMFLOAT3X4 World;
-	union
-	{
-		DirectX::XMFLOAT3X4 WorldIT;
-		struct
-		{
-			float padding[11];
-			uint32_t MeshId;
-		};
-	};
-};
-
 struct CBPerFrame
 {
 	DirectX::XMFLOAT4X4 ViewProj;
 	DirectX::XMFLOAT3X4 VolumeWorld;
 	DirectX::XMFLOAT3X4 VolumeWorldI;
 	uint32_t SampleIndex;
+};
+
+struct PerObject
+{
+	DirectX::XMFLOAT3X4 World;
+	DirectX::XMFLOAT3X4 WorldIT;
 };
 
 struct LightSource
@@ -105,6 +97,13 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 		}
 	}
 
+	for (auto& matrices : m_matrices)
+	{
+		matrices = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(matrices->Create(pDevice, meshCount, sizeof(PerObject), ResourceFlag::NONE,
+			MemoryType::UPLOAD, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"Matrices"), false);
+	}
+
 	m_globalSDF = Texture3D::MakeUnique();
 	XUSG_N_RETURN(m_globalSDF->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R32_FLOAT,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"GlobalSDF"), false);
@@ -122,10 +121,16 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	return true;
 }
 
-void Renderer::SetViewport(uint32_t width, uint32_t height)
+bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t height)
 {
 	m_viewport.x = static_cast<float>(width);
 	m_viewport.y = static_cast<float>(height);
+
+	// Create texture
+	m_visibility = RenderTarget::MakeUnique();
+
+	return m_visibility->Create(pDevice, width, height, Format::R32_UINT, 1,
+		ResourceFlag::NONE, 1, 1, nullptr, false, MemoryFlag::NONE, L"Visibility");
 }
 
 void Renderer::UpdateFrame(uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
@@ -138,15 +143,13 @@ void Renderer::UpdateFrame(uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewPr
 	pCbPerFrame->SampleIndex = m_frameIndex;
 
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+	const auto pPerObject = static_cast<PerObject*>(m_matrices[frameIndex]->Map());
 	for (auto i = 0u; i < meshCount; ++i)
 	{
 		const auto world = getWorldMatrix(i);
 		const auto worldIT = XMMatrixTranspose(XMMatrixInverse(nullptr, world));
-
-		const auto pCbPerObject = static_cast<CBPerObject*>(m_meshes[i].CbPerObject->Map(frameIndex));
-		XMStoreFloat3x4(&pCbPerObject->World, world);		// 3x4 store doesn't need matrix transpose
-		XMStoreFloat3x4(&pCbPerObject->WorldIT, worldIT);	// 3x4 store doesn't need matrix transpose
-		pCbPerObject->MeshId = i;
+		XMStoreFloat3x4(&pPerObject[i].World, world);		// 3x4 store doesn't need matrix transpose
+		XMStoreFloat3x4(&pPerObject[i].WorldIT, worldIT);	// 3x4 store doesn't need matrix transpose
 	}
 
 	const auto lightSourceCount = static_cast<uint32_t>(m_lightSourceMeshIds.size());
@@ -170,10 +173,11 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 			pCommandList->ClearUnorderedAccessViewFloat(uav, clear);
 		}
 		buildSDF(pCommandList, frameIndex);
-		render(pCommandList, frameIndex, 0, pRenderTarget, pDepthStencil);
 		++m_frameIndex;
 	}
-	else render(pCommandList, frameIndex, 0, pRenderTarget, pDepthStencil);
+	
+	visibility(pCommandList, frameIndex, pDepthStencil);
+	render(pCommandList, frameIndex, pRenderTarget);
 }
 
 bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders,
@@ -232,8 +236,12 @@ bool Renderer::createMeshIB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId
 bool Renderer::createMeshCB(const XUSG::Device* pDevice, uint32_t meshId)
 {
 	m_meshes[meshId].CbPerObject = ConstantBuffer::MakeUnique();
+	XUSG_N_RETURN(m_meshes[meshId].CbPerObject->Create(pDevice, sizeof(uint32_t)), false);
 
-	return m_meshes[meshId].CbPerObject->Create(pDevice, sizeof(CBPerObject[FrameCount]), FrameCount);
+	const auto pMeshId = static_cast<uint32_t*>(m_meshes[meshId].CbPerObject->Map());
+	*pMeshId = meshId;
+
+	return true;
 }
 
 bool Renderer::createCBs(const XUSG::Device* pDevice)
@@ -253,14 +261,17 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSBuildSDF.cso"), false);
 	m_shaders[CS_BUILD_SDF] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
 
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::VS, vsIndex, L"VSVisibility.cso"), false);
+	m_shaders[VS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::VS, vsIndex++);
+
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::VS, vsIndex, L"VSScreenQuad.cso"), false);
 	m_shaders[VS_SCREEN_QUAD] = m_shaderLib->GetShader(Shader::Stage::VS, vsIndex++);
 
-	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::VS, vsIndex, L"VSDrawMesh.cso"), false);
-	m_shaders[VS_DRAW_MESH] = m_shaderLib->GetShader(Shader::Stage::VS, vsIndex++);
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSVisibility.cso"), false);
+	m_shaders[PS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
-	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSDrawMesh.cso"), false);
-	m_shaders[PS_DRAW_MESH] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSShade.cso"), false);
+	m_shaders[PS_SHADE] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
 	return true;
 }
@@ -331,45 +342,38 @@ void Renderer::buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
 }
 
-void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex,
-	uint8_t pingpong, RenderTarget* pRenderTarget, DepthStencil* pDepthStencil)
+void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, DepthStencil* pDepthStencil)
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
 	// set pipeline state
-	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_DRAW_MESH]);
-	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_DRAW_MESH]);
+	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_VISIBILITY]);
+	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_VISIBILITY]);
 	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEFAULT_LESS);
 	pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
 	pCommandList->OMSetBlendState(Graphics::BlendPreset::DEFAULT_OPAQUE);
 
 	// Set render target
-	const auto rtv = XUSG::EZ::GetRTV(pRenderTarget);
+	const auto rtv = XUSG::EZ::GetRTV(m_visibility.get());
 	const auto dsv = XUSG::EZ::GetDSV(pDepthStencil);
 	pCommandList->OMSetRenderTargets(1, &rtv, &dsv);
 
 	// Clear render target
-	float clearColor[4] = { 0.2f, 0.2f, 0.2f, 0.0f };
+	float clearColor[4] = {};
 	pCommandList->ClearRenderTargetView(rtv, clearColor);
 	pCommandList->ClearDepthStencilView(dsv, ClearFlag::DEPTH, 1.0f);
 
 	// Set Per-frame CBV
 	XUSG::EZ::ResourceView cbvs[2];
-	cbvs[0] = XUSG::EZ::GetCBV(m_cbPerFrame.get());
-	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::CBV, 0, 1, cbvs);
+	cbvs[1] = XUSG::EZ::GetCBV(m_cbPerFrame.get(), frameIndex);
 
 	// Set SRVs
-	vector<XUSG::EZ::ResourceView> srvs(meshCount);
+	const auto srv = XUSG::EZ::GetSRV(m_matrices[frameIndex].get());
+	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 0, 1, &srv);
+
+	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
 	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 0, meshCount, srvs.data());
-
-	// Set SDF
-	const auto srv = XUSG::EZ::GetSRV(m_globalSDF.get());
-	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, 1, &srv);
-
-	// Set sampler
-	const auto sampler = SamplerPreset::LINEAR_CLAMP;
-	pCommandList->SetSamplerStates(Shader::Stage::PS, 0, 1, &sampler);
+	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 1, meshCount, srvs.data());
 
 	// Set viewport
 	Viewport viewport(0.0f, 0.0f, m_viewport.x, m_viewport.y);
@@ -387,12 +391,74 @@ void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex,
 		pCommandList->IASetIndexBuffer(ibv);
 
 		// Set per-object CBVs
-		cbvs[1] = XUSG::EZ::GetCBV(m_meshes[i].CbPerObject.get());
+		cbvs[0] = XUSG::EZ::GetCBV(m_meshes[i].CbPerObject.get());
 		pCommandList->SetResources(Shader::Stage::VS, DescriptorType::CBV, 0, static_cast<uint32_t>(size(cbvs)), cbvs);
+		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::CBV, 0, 1, cbvs);
 
 		// Draw command
 		pCommandList->DrawIndexed(m_meshes[i].NumIndices, 1, 0, 0, 0);
 	}
+}
+
+void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, RenderTarget* pRenderTarget)
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+
+	// set pipeline state
+	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_SCREEN_QUAD]);
+	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_SHADE]);
+	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEPTH_STENCIL_NONE);
+	pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
+	pCommandList->OMSetBlendState(Graphics::BlendPreset::DEFAULT_OPAQUE);
+
+	// Set render target
+	const auto rtv = XUSG::EZ::GetRTV(pRenderTarget);
+	pCommandList->OMSetRenderTargets(1, &rtv, nullptr);
+
+	// Clear render target
+	float clearColor[4] = { 0.2f, 0.2f, 0.2f, 0.0f };
+	pCommandList->ClearRenderTargetView(rtv, clearColor);
+
+	// Set CBV
+	const auto cbv = XUSG::EZ::GetCBV(m_cbPerFrame.get(), frameIndex);
+	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::CBV, 0, 1, &cbv);
+
+	// Set SRVs
+	{
+		const XUSG::EZ::ResourceView srvs[] =
+		{
+			XUSG::EZ::GetSRV(m_visibility.get()),
+			XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
+			XUSG::EZ::GetSRV(m_globalSDF.get())
+		};
+		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
+	}
+	
+	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
+
+	// Set index buffers
+	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].IndexBuffer.get());
+	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
+
+	// Set vertex buffers
+	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
+	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+
+	// Set sampler
+	const auto sampler = SamplerPreset::LINEAR_CLAMP;
+	pCommandList->SetSamplerStates(Shader::Stage::PS, 0, 1, &sampler);
+
+	// Set viewport
+	Viewport viewport(0.0f, 0.0f, m_viewport.x, m_viewport.y);
+	RectRange scissorRect(0, 0, static_cast<long>(m_viewport.x), static_cast<long>(m_viewport.y));
+	pCommandList->RSSetViewports(1, &viewport);
+	pCommandList->RSSetScissorRects(1, &scissorRect);
+
+	// Set IA
+	pCommandList->IASetPrimitiveTopology(PrimitiveTopology::TRIANGLELIST);
+
+	// Draw command
+	pCommandList->Draw(3, 1, 0, 0);
 }
 
 void Renderer::calcMeshWorldAABB(XMVECTOR pAABB[2], uint32_t meshId) const
