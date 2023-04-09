@@ -56,6 +56,7 @@ namespace XUSG
 		{
 			float4 Min;
 			float4 Max;
+			float4 Emissive;
 		};
 
 		GltfLoader();

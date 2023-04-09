@@ -30,6 +30,7 @@ struct LightSource
 {
 	DirectX::XMFLOAT4 Min;
 	DirectX::XMFLOAT4 Max;
+	DirectX::XMFLOAT4 Emissive;
 	DirectX::XMFLOAT3X4 World;
 };
 
@@ -85,7 +86,7 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	{
 		for (auto& lightSourceBuffer : m_lightSources)
 		{
-			lightSourceBuffer = StructuredBuffer::MakeUnique();// !!!
+			lightSourceBuffer = StructuredBuffer::MakeUnique();
 			XUSG_N_RETURN(lightSourceBuffer->Create(pDevice, lightSourceCount, sizeof(LightSource), ResourceFlag::NONE,
 				MemoryType::UPLOAD, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"LightSources"), false); // MemoryType::UPLOAD  CPU 
 
@@ -429,7 +430,8 @@ void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, R
 		{
 			XUSG::EZ::GetSRV(m_visibility.get()),
 			XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
-			XUSG::EZ::GetSRV(m_globalSDF.get())
+			XUSG::EZ::GetSRV(m_globalSDF.get()),
+			XUSG::EZ::GetSRV(m_lightSources[frameIndex].get())
 		};
 		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 	}

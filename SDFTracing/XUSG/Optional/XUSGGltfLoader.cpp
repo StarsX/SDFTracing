@@ -188,6 +188,9 @@ bool GltfLoader::Import(const char* pszFilename, bool needNorm, bool needColor, 
 							lightSource.Max.y = (max)(p->y, lightSource.Max.y);
 							lightSource.Max.z = (max)(p->z, lightSource.Max.z);
 						}
+
+						lightSource.Emissive = vertexColor;
+						lightSource.Emissive.w = vertexScalar;
 					}
 					else if (primitive.material->has_pbr_metallic_roughness)
 					{
