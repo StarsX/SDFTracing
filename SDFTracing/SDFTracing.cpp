@@ -24,7 +24,7 @@ static const float g_zFar = 100.0f;
 
 const auto g_backBufferFormat = Format::R8G8B8A8_UNORM;
 
-AdaptiveDDGI::AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name) :
+SDFTracing::SDFTracing(uint32_t width, uint32_t height, std::wstring name) :
 	DXFramework(width, height, name),
 	m_isDxrSupported(false),
 	m_frameIndex(0),
@@ -51,21 +51,21 @@ AdaptiveDDGI::AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name) :
 	};
 }
 
-AdaptiveDDGI::~AdaptiveDDGI()
+SDFTracing::~SDFTracing()
 {
 #if defined (_DEBUG)
 	FreeConsole();
 #endif
 }
 
-void AdaptiveDDGI::OnInit()
+void SDFTracing::OnInit()
 {
 	LoadPipeline();
 	LoadAssets();
 }
 
 // Load the rendering pipeline dependencies.
-void AdaptiveDDGI::LoadPipeline()
+void SDFTracing::LoadPipeline()
 {
 	auto dxgiFactoryFlags = 0u;
 
@@ -131,7 +131,7 @@ void AdaptiveDDGI::LoadPipeline()
 }
 
 // Load the sample assets.
-void AdaptiveDDGI::LoadAssets()
+void SDFTracing::LoadAssets()
 {
 	// Create the command list.
 	const auto commandList = RayTracing::CommandList::MakeUnique();
@@ -195,7 +195,7 @@ void AdaptiveDDGI::LoadAssets()
 	XMStoreFloat4x4(&m_view, view);
 }
 
-void AdaptiveDDGI::CreateSwapchain()
+void SDFTracing::CreateSwapchain()
 {
 	// Describe and create the swap chain.
 	m_swapChain = SwapChain::MakeUnique();
@@ -206,7 +206,7 @@ void AdaptiveDDGI::CreateSwapchain()
 	ThrowIfFailed(m_factory->MakeWindowAssociation(Win32Application::GetHwnd(), DXGI_MWA_NO_ALT_ENTER));
 }
 
-void AdaptiveDDGI::CreateResources()
+void SDFTracing::CreateResources()
 {
 	// Obtain the back buffers for this window which will be the final render targets
 	// and create render target views for each of them.
@@ -225,7 +225,7 @@ void AdaptiveDDGI::CreateResources()
 }
 
 // Update frame-based values.
-void AdaptiveDDGI::OnUpdate()
+void SDFTracing::OnUpdate()
 {
 	// Timer
 	static auto time = 0.0, pauseTime = 0.0;
@@ -244,7 +244,7 @@ void AdaptiveDDGI::OnUpdate()
 }
 
 // Render the scene.
-void AdaptiveDDGI::OnRender()
+void SDFTracing::OnRender()
 {
 	// Record all the commands we need to render the scene into the command list.
 	PopulateCommandList();
@@ -258,7 +258,7 @@ void AdaptiveDDGI::OnRender()
 	MoveToNextFrame();
 }
 
-void AdaptiveDDGI::OnDestroy()
+void SDFTracing::OnDestroy()
 {
 	// Ensure that the GPU is no longer referencing resources that are about to be
 	// cleaned up by the destructor.
@@ -267,7 +267,7 @@ void AdaptiveDDGI::OnDestroy()
 	CloseHandle(m_fenceEvent);
 }
 
-void AdaptiveDDGI::OnWindowSizeChanged(int width, int height)
+void SDFTracing::OnWindowSizeChanged(int width, int height)
 {
 	if (!Win32Application::GetHwnd())
 	{
@@ -331,7 +331,7 @@ void AdaptiveDDGI::OnWindowSizeChanged(int width, int height)
 }
 
 // User hot-key interactions.
-void AdaptiveDDGI::OnKeyUp(uint8_t key)
+void SDFTracing::OnKeyUp(uint8_t key)
 {
 	switch (key)
 	{
@@ -348,18 +348,18 @@ void AdaptiveDDGI::OnKeyUp(uint8_t key)
 }
 
 // User camera interactions.
-void AdaptiveDDGI::OnLButtonDown(float posX, float posY)
+void SDFTracing::OnLButtonDown(float posX, float posY)
 {
 	m_tracking = true;
 	m_mousePt = XMFLOAT2(posX, posY);
 }
 
-void AdaptiveDDGI::OnLButtonUp(float posX, float posY)
+void SDFTracing::OnLButtonUp(float posX, float posY)
 {
 	m_tracking = false;
 }
 
-void AdaptiveDDGI::OnMouseMove(float posX, float posY)
+void SDFTracing::OnMouseMove(float posX, float posY)
 {
 	if (m_tracking)
 	{
@@ -388,7 +388,7 @@ void AdaptiveDDGI::OnMouseMove(float posX, float posY)
 	}
 }
 
-void AdaptiveDDGI::OnMouseWheel(float deltaZ, float posX, float posY)
+void SDFTracing::OnMouseWheel(float deltaZ, float posX, float posY)
 {
 	const auto focusPt = XMLoadFloat3(&m_focusPt);
 	auto eyePt = XMLoadFloat3(&m_eyePt);
@@ -404,12 +404,12 @@ void AdaptiveDDGI::OnMouseWheel(float deltaZ, float posX, float posY)
 	XMStoreFloat4x4(&m_view, view);
 }
 
-void AdaptiveDDGI::OnMouseLeave()
+void SDFTracing::OnMouseLeave()
 {
 	m_tracking = false;
 }
 
-void AdaptiveDDGI::ParseCommandLineArgs(wchar_t* argv[], int argc)
+void SDFTracing::ParseCommandLineArgs(wchar_t* argv[], int argc)
 {
 	DXFramework::ParseCommandLineArgs(argv, argc);
 
@@ -428,7 +428,7 @@ void AdaptiveDDGI::ParseCommandLineArgs(wchar_t* argv[], int argc)
 	//}
 }
 
-void AdaptiveDDGI::PopulateCommandList()
+void SDFTracing::PopulateCommandList()
 {
 	// Command list allocators can only be reset when the associated 
 	// command lists have finished execution on the GPU; apps should use 
@@ -458,7 +458,7 @@ void AdaptiveDDGI::PopulateCommandList()
 }
 
 // Wait for pending GPU work to complete.
-void AdaptiveDDGI::WaitForGpu()
+void SDFTracing::WaitForGpu()
 {
 	// Schedule a Signal command in the queue.
 	XUSG_N_RETURN(m_commandQueue->Signal(m_fence.get(), m_fenceValues[m_frameIndex]), ThrowIfFailed(E_FAIL));
@@ -469,7 +469,7 @@ void AdaptiveDDGI::WaitForGpu()
 }
 
 // Prepare to render the next frame.
-void AdaptiveDDGI::MoveToNextFrame()
+void SDFTracing::MoveToNextFrame()
 {
 	// Schedule a Signal command in the queue.
 	const auto currentFenceValue = m_fenceValues[m_frameIndex];
@@ -497,14 +497,14 @@ void AdaptiveDDGI::MoveToNextFrame()
 			tm dateTime;
 			const auto now = time(nullptr);
 			if (!localtime_s(&dateTime, &now) && strftime(timeStr, sizeof(timeStr), "%Y%m%d%H%M%S", &dateTime))
-				SaveImage((string("AdaptiveDDGI_") + timeStr + ".png").c_str(), m_readBuffer.get(), m_width, m_height, m_rowPitch);
+				SaveImage((string("SDFTracing_") + timeStr + ".png").c_str(), m_readBuffer.get(), m_width, m_height, m_rowPitch);
 			m_screenShot = 0;
 		}
 		else ++m_screenShot;
 	}
 }
 
-void AdaptiveDDGI::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp)
+void SDFTracing::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp)
 {
 	assert(comp == 3 || comp == 4);
 	const auto pData = static_cast<uint8_t*>(imageBuffer->Map(nullptr));
@@ -526,7 +526,7 @@ void AdaptiveDDGI::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t
 	m_readBuffer->Unmap();
 }
 
-double AdaptiveDDGI::CalculateFrameStats(float* pTimeStep)
+double SDFTracing::CalculateFrameStats(float* pTimeStep)
 {
 	static int frameCnt = 0;
 	static double elapsedTime = 0.0;
@@ -587,7 +587,7 @@ inline bool IsDirectXRaytracingSupported(IDXGIAdapter1* adapter)
 		&& featureSupportData.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 }
 
-void AdaptiveDDGI::EnableDirectXRaytracing(IDXGIAdapter1* adapter)
+void SDFTracing::EnableDirectXRaytracing(IDXGIAdapter1* adapter)
 {
 	// Fallback Layer uses an experimental feature and needs to be enabled before creating a D3D12 device.
 	bool isFallbackSupported = EnableComputeRaytracingFallback(adapter);

@@ -23,11 +23,11 @@ using namespace DirectX;
 // referenced by the GPU.
 // An example of this can be found in the class method: OnDestroy().
 
-class AdaptiveDDGI : public DXFramework
+class SDFTracing : public DXFramework
 {
 public:
-	AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name);
-	virtual ~AdaptiveDDGI();
+	SDFTracing(uint32_t width, uint32_t height, std::wstring name);
+	virtual ~SDFTracing();
 
 	virtual void OnInit();
 	virtual void OnUpdate();

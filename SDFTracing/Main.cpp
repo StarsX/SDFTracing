@@ -14,7 +14,7 @@
 _Use_decl_annotations_
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
-	AdaptiveDDGI adaptiveDDGI(1920, 1080, L"SDF Tracing");
+	SDFTracing sdfTracing(1920, 1080, L"SDF Tracing");
 
-	return Win32Application::Run(&adaptiveDDGI, hInstance, nCmdShow);
+	return Win32Application::Run(&sdfTracing, hInstance, nCmdShow);
 }
