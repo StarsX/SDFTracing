@@ -90,6 +90,11 @@ private:
 	// User external settings
 	std::vector<Renderer::MeshDesc> m_meshDescs;
 
+	// Screen-shot helpers and state
+	XUSG::Buffer::uptr	m_readBuffer;
+	uint32_t			m_rowPitch;
+	uint8_t				m_screenShot;
+
 	void LoadPipeline();
 	void LoadAssets();
 	void CreateSwapchain();
@@ -97,6 +102,8 @@ private:
 	void PopulateCommandList();
 	void WaitForGpu();
 	void MoveToNextFrame();
+	void SaveImage(char const* fileName, XUSG::Buffer* imageBuffer,
+		uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp = 3);
 	double CalculateFrameStats(float* fTimeStep = nullptr);
 
 	// Ray tracing

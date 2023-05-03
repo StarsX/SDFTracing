@@ -10,6 +10,7 @@
 //*********************************************************
 
 #include "SDFTracing.h"
+#include "stb_image_write.h"
 
 using namespace std;
 using namespace XUSG;
@@ -21,7 +22,7 @@ static const float g_FOVAngleY = PIDIV4;
 static const float g_zNear = 1.0f;
 static const float g_zFar = 100.0f;
 
-const auto g_backFormat = Format::R8G8B8A8_UNORM;
+const auto g_backBufferFormat = Format::R8G8B8A8_UNORM;
 
 AdaptiveDDGI::AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name) :
 	DXFramework(width, height, name),
@@ -31,7 +32,8 @@ AdaptiveDDGI::AdaptiveDDGI(uint32_t width, uint32_t height, std::wstring name) :
 	m_scissorRect(0, 0, static_cast<long>(width), static_cast<long>(height)),
 	m_showFPS(true),
 	m_pausing(false),
-	m_tracking(false)
+	m_tracking(false),
+	m_screenShot(0)
 {
 #if defined (_DEBUG)
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
@@ -198,7 +200,7 @@ void AdaptiveDDGI::CreateSwapchain()
 	// Describe and create the swap chain.
 	m_swapChain = SwapChain::MakeUnique();
 	XUSG_N_RETURN(m_swapChain->Create(m_factory.get(), Win32Application::GetHwnd(), m_commandQueue->GetHandle(),
-		FrameCount, m_width, m_height, g_backFormat, SwapChainFlag::ALLOW_TEARING), ThrowIfFailed(E_FAIL));
+		FrameCount, m_width, m_height, g_backBufferFormat, SwapChainFlag::ALLOW_TEARING), ThrowIfFailed(E_FAIL));
 
 	// This class does not support exclusive full-screen mode and prevents DXGI from responding to the ALT+ENTER shortcut.
 	ThrowIfFailed(m_factory->MakeWindowAssociation(Win32Application::GetHwnd(), DXGI_MWA_NO_ALT_ENTER));
@@ -291,7 +293,7 @@ void AdaptiveDDGI::OnWindowSizeChanged(int width, int height)
 	if (m_swapChain)
 	{
 		// If the swap chain already exists, resize it.
-		const auto hr = m_swapChain->ResizeBuffers(FrameCount, m_width, m_height, g_backFormat, SwapChainFlag::ALLOW_TEARING);
+		const auto hr = m_swapChain->ResizeBuffers(FrameCount, m_width, m_height, g_backBufferFormat, SwapChainFlag::ALLOW_TEARING);
 
 		if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
 		{
@@ -338,6 +340,9 @@ void AdaptiveDDGI::OnKeyUp(uint8_t key)
 		break;
 	case VK_F1:
 		m_showFPS = !m_showFPS;
+		break;
+	case VK_F11:
+		m_screenShot = 1;
 		break;
 	}
 }
@@ -438,10 +443,18 @@ void AdaptiveDDGI::PopulateCommandList()
 	XUSG_N_RETURN(pCommandList->Reset(pCommandAllocator, nullptr), ThrowIfFailed(E_FAIL));
 
 	// Voxelizer rendering
-	const auto renderTarget = m_renderTargets[m_frameIndex].get();
-	m_renderer->Render(pCommandList, m_frameIndex, renderTarget, m_depth.get());
+	const auto pRenderTarget = m_renderTargets[m_frameIndex].get();
+	m_renderer->Render(pCommandList, m_frameIndex, pRenderTarget, m_depth.get());
 
-	XUSG_N_RETURN(pCommandList->Close(renderTarget), ThrowIfFailed(E_FAIL));
+	// Screen-shot helper
+	if (m_screenShot == 1)
+	{
+		if (!m_readBuffer) m_readBuffer = Buffer::MakeUnique();
+		pRenderTarget->ReadBack(pCommandList->AsCommandList(), m_readBuffer.get(), &m_rowPitch);
+		m_screenShot = 2;
+	}
+
+	XUSG_N_RETURN(pCommandList->Close(pRenderTarget), ThrowIfFailed(E_FAIL));
 }
 
 // Wait for pending GPU work to complete.
@@ -474,6 +487,43 @@ void AdaptiveDDGI::MoveToNextFrame()
 
 	// Set the fence value for the next frame.
 	m_fenceValues[m_frameIndex] = currentFenceValue + 1;
+
+	// Screen-shot helper
+	if (m_screenShot)
+	{
+		if (m_screenShot > FrameCount)
+		{
+			char timeStr[15];
+			tm dateTime;
+			const auto now = time(nullptr);
+			if (!localtime_s(&dateTime, &now) && strftime(timeStr, sizeof(timeStr), "%Y%m%d%H%M%S", &dateTime))
+				SaveImage((string("AdaptiveDDGI_") + timeStr + ".png").c_str(), m_readBuffer.get(), m_width, m_height, m_rowPitch);
+			m_screenShot = 0;
+		}
+		else ++m_screenShot;
+	}
+}
+
+void AdaptiveDDGI::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp)
+{
+	assert(comp == 3 || comp == 4);
+	const auto pData = static_cast<uint8_t*>(imageBuffer->Map(nullptr));
+
+	//stbi_write_png_compression_level = 1024;
+	vector<uint8_t> imageData(comp * w * h);
+	const auto sw = rowPitch / 4;
+	for (auto i = 0u; i < h; ++i)
+		for (auto j = 0u; j < w; ++j)
+		{
+			const auto s = sw * i + j;
+			const auto d = w * i + j;
+			for (uint8_t k = 0; k < comp; ++k)
+				imageData[comp * d + k] = pData[4 * s + k];
+		}
+
+	stbi_write_png(fileName, w, h, comp, imageData.data(), 0);
+
+	m_readBuffer->Unmap();
 }
 
 double AdaptiveDDGI::CalculateFrameStats(float* pTimeStep)
@@ -498,6 +548,8 @@ double AdaptiveDDGI::CalculateFrameStats(float* pTimeStep)
 		windowText << L"    fps: ";
 		if (m_showFPS) windowText << setprecision(2) << fixed << fps;
 		else windowText << L"[F1]";
+
+		windowText << L"    [F11] screen shot";
 
 		SetCustomWindowText(windowText.str().c_str());
 	}
