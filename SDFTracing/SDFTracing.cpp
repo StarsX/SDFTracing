@@ -90,16 +90,15 @@ void SDFTracing::LoadPipeline()
 	DXGI_ADAPTER_DESC1 dxgiAdapterDesc;
 	com_ptr<IDXGIAdapter1> dxgiAdapter;
 	auto hr = DXGI_ERROR_UNSUPPORTED;
-	const auto createDeviceFlags = EnableRootDescriptorsInShaderRecords;
 	for (auto i = 0u; hr == DXGI_ERROR_UNSUPPORTED; ++i)
 	{
 		dxgiAdapter = nullptr;
 		ThrowIfFailed(m_factory->EnumAdapters1(i, &dxgiAdapter));
-		//EnableDirectXRaytracing(dxgiAdapter.get());
+		EnableDirectXRaytracing(dxgiAdapter.get());
 
 		m_device = RayTracing::Device::MakeUnique();
 		hr = m_device->Create(dxgiAdapter.get(), D3D_FEATURE_LEVEL_11_0);
-		XUSG_N_RETURN(m_device->CreateInterface(createDeviceFlags), ThrowIfFailed(E_FAIL));
+		XUSG_N_RETURN(m_device->CreateInterface(), ThrowIfFailed(E_FAIL));
 	}
 
 	dxgiAdapter->GetDesc1(&dxgiAdapterDesc);
@@ -572,7 +571,7 @@ inline bool IsDirectXRaytracingSupported(IDXGIAdapter1* adapter)
 
 	return SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&testDevice)))
 		&& SUCCEEDED(testDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &featureSupportData, sizeof(featureSupportData)))
-		&& featureSupportData.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
+		&& featureSupportData.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
 }
 
 void SDFTracing::EnableDirectXRaytracing(IDXGIAdapter1* adapter)
