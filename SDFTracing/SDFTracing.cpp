@@ -504,14 +504,14 @@ void SDFTracing::MoveToNextFrame()
 	}
 }
 
-void SDFTracing::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp)
+void SDFTracing::SaveImage(char const* fileName, Buffer* pImageBuffer, uint32_t w, uint32_t h, uint32_t rowPitch, uint8_t comp)
 {
 	assert(comp == 3 || comp == 4);
-	const auto pData = static_cast<uint8_t*>(imageBuffer->Map(nullptr));
+	const auto pData = static_cast<const uint8_t*>(pImageBuffer->Map(nullptr));
 
 	//stbi_write_png_compression_level = 1024;
 	vector<uint8_t> imageData(comp * w * h);
-	const auto sw = rowPitch / 4;
+	const auto sw = rowPitch / 4; // Byte to pixel
 	for (auto i = 0u; i < h; ++i)
 		for (auto j = 0u; j < w; ++j)
 		{
@@ -523,7 +523,7 @@ void SDFTracing::SaveImage(char const* fileName, Buffer* imageBuffer, uint32_t w
 
 	stbi_write_png(fileName, w, h, comp, imageData.data(), 0);
 
-	m_readBuffer->Unmap();
+	pImageBuffer->Unmap();
 }
 
 double SDFTracing::CalculateFrameStats(float* pTimeStep)
@@ -564,18 +564,6 @@ double SDFTracing::CalculateFrameStats(float* pTimeStep)
 // Ray tracing
 //--------------------------------------------------------------------------------------
 
-// Enable experimental features required for compute-based raytracing fallback.
-// This will set active D3D12 devices to DEVICE_REMOVED state.
-// Returns bool whether the call succeeded and the device supports the feature.
-inline bool EnableComputeRaytracingFallback(IDXGIAdapter1* adapter)
-{
-	ComPtr<ID3D12Device> testDevice;
-	UUID experimentalFeatures[] = { D3D12ExperimentalShaderModels };
-
-	return SUCCEEDED(D3D12EnableExperimentalFeatures(1, experimentalFeatures, nullptr, nullptr))
-		&& SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&testDevice)));
-}
-
 // Returns bool whether the device supports DirectX Raytracing tier.
 inline bool IsDirectXRaytracingSupported(IDXGIAdapter1* adapter)
 {
@@ -589,25 +577,8 @@ inline bool IsDirectXRaytracingSupported(IDXGIAdapter1* adapter)
 
 void SDFTracing::EnableDirectXRaytracing(IDXGIAdapter1* adapter)
 {
-	// Fallback Layer uses an experimental feature and needs to be enabled before creating a D3D12 device.
-	bool isFallbackSupported = EnableComputeRaytracingFallback(adapter);
-
-	if (!isFallbackSupported)
-	{
-		OutputDebugString(
-			L"Warning: Could not enable Compute Raytracing Fallback (D3D12EnableExperimentalFeatures() failed).\n" \
-			L"         Possible reasons: your OS is not in developer mode.\n\n");
-	}
-
 	m_isDxrSupported = IsDirectXRaytracingSupported(adapter);
 
 	if (!m_isDxrSupported)
-	{
 		OutputDebugString(L"Warning: DirectX Raytracing is not supported by your GPU and driver.\n\n");
-
-		if (!isFallbackSupported)
-			OutputDebugString(L"Could not enable compute based fallback raytracing support (D3D12EnableExperimentalFeatures() failed).\n"\
-				L"Possible reasons: your OS is not in developer mode.\n\n");
-		ThrowIfFailed(isFallbackSupported ? S_OK : E_FAIL);
-	}
 }
