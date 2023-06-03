@@ -109,11 +109,26 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	XUSG_N_RETURN(m_globalSDF->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R32_FLOAT,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"GlobalSDF"), false);
 
+	m_idVolume = Texture3D::MakeUnique();
+	XUSG_N_RETURN(m_idVolume->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R32_UINT,
+		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"IdVolume"), false);
+
+	m_barycVolume = Texture3D::MakeUnique();
+	XUSG_N_RETURN(m_barycVolume->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R16G16_UNORM,
+		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"BarycentricsVolume"), false);
+
+	m_irradiance = Texture3D::MakeUnique();
+	XUSG_N_RETURN(m_irradiance->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R11G11B10_FLOAT,
+		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"IrradianceVolume"), false);
+
 	// Allocate dynamic mesh buffer
-	m_dynamicMeshList = StructuredBuffer::MakeUnique();// create buffer, upload to GPU
-	XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()), sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"DynamicMeshes"), false);//create dynamic meshes GPU
+	m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
+	XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()),
+		sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr,
+		MemoryFlag::NONE, L"DynamicMeshes"), false); // create dynamic meshes GPU
 	uploaders.emplace_back(Resource::MakeUnique());
-	XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(), m_dynamicMeshes.data(), m_dynamicMeshes.size()*sizeof(DynamicMesh)), false);
+	XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+		m_dynamicMeshes.data(), m_dynamicMeshes.size()*sizeof(DynamicMesh)), false);
 
 	// Build acceleration structures and create shaders
 	XUSG_N_RETURN(buildAccelerationStructures(pCommandList, pGeometries), false);
@@ -178,6 +193,7 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 	}
 	
 	visibility(pCommandList, frameIndex, pDepthStencil);
+	renderVolume(pCommandList, frameIndex);
 	render(pCommandList, frameIndex, pRenderTarget);
 }
 
@@ -262,6 +278,9 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSBuildSDF.cso"), false);
 	m_shaders[CS_BUILD_SDF] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
 
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSShadeVolume.cso"), false);
+	m_shaders[CS_SHADE_VOLUME] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
+
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::VS, vsIndex, L"VSVisibility.cso"), false);
 	m_shaders[VS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::VS, vsIndex++);
 
@@ -328,9 +347,14 @@ void Renderer::buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t
 	// Set pipeline state
 	pCommandList->SetComputeShader(m_shaders[CS_BUILD_SDF]);
 
-	// Set UAV
-	const auto uav = XUSG::EZ::GetUAV(m_globalSDF.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::UAV, 0, 1, &uav);
+	// Set UAVs
+	const XUSG::EZ::ResourceView uavs[] =
+	{
+		XUSG::EZ::GetUAV(m_globalSDF.get()),
+		XUSG::EZ::GetUAV(m_idVolume.get()),
+		XUSG::EZ::GetUAV(m_barycVolume.get()),
+	};
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::UAV, 0, static_cast<uint32_t>(size(uavs)), uavs);
 
 	// Set CBV
 	const auto cbv = XUSG::EZ::GetCBV(m_cbPerFrame.get());
@@ -347,7 +371,7 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
-	// set pipeline state
+	// Set pipeline state
 	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_VISIBILITY]);
 	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_VISIBILITY]);
 	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEFAULT_LESS);
@@ -401,11 +425,56 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 	}
 }
 
+void Renderer::renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex)
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+
+	// Set pipeline state
+	pCommandList->SetComputeShader(m_shaders[CS_SHADE_VOLUME]);
+	
+	// Set UAV
+	const auto uav = XUSG::EZ::GetUAV(m_irradiance.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::UAV, 0, 1, &uav);
+
+	// Set CBV
+	const auto cbv = XUSG::EZ::GetCBV(m_cbPerFrame.get(), frameIndex);
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::CBV, 0, 1, &cbv);
+
+	// Set SRVs
+	{
+		const XUSG::EZ::ResourceView srvs[] =
+		{
+			XUSG::EZ::GetSRV(m_idVolume.get()),
+			XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
+			XUSG::EZ::GetSRV(m_globalSDF.get()),
+			XUSG::EZ::GetSRV(m_lightSources[frameIndex].get()),
+			XUSG::EZ::GetSRV(m_barycVolume.get()),
+		};
+		pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
+	}
+
+	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
+
+	// Set index buffers
+	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].IndexBuffer.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
+
+	// Set vertex buffers
+	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+
+	// Set sampler
+	const auto sampler = SamplerPreset::LINEAR_CLAMP;
+	pCommandList->SetSamplerStates(Shader::Stage::CS, 0, 1, &sampler);
+
+	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
+}
+
 void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, RenderTarget* pRenderTarget)
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
-	// set pipeline state
+	// Set pipeline state
 	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_SCREEN_QUAD]);
 	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_SHADE]);
 	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEPTH_STENCIL_NONE);
@@ -431,7 +500,8 @@ void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, R
 			XUSG::EZ::GetSRV(m_visibility.get()),
 			XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
 			XUSG::EZ::GetSRV(m_globalSDF.get()),
-			XUSG::EZ::GetSRV(m_lightSources[frameIndex].get())
+			XUSG::EZ::GetSRV(m_lightSources[frameIndex].get()),
+			XUSG::EZ::GetSRV(m_irradiance.get())
 		};
 		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 	}

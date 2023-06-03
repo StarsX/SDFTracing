@@ -3,6 +3,7 @@
 //--------------------------------------------------------------------------------------
 
 #include "SharedConst.h"
+#include "DecodeVisibility.hlsli"
 #include "MonteCarlo.hlsli"
 
 typedef RaytracingAccelerationStructure RaytracingAS;
@@ -23,7 +24,9 @@ cbuffer cbPerFrame
 // Textures and buffers
 //--------------------------------------------------------------------------------------
 // Texture
-RWTexture3D<float> g_rwSDF : register (u0);
+RWTexture3D<float> g_rwSDF		: register (u0);
+RWTexture3D<uint> g_rwIds		: register (u1);
+RWTexture3D<float2> g_rwBaryc	: register (u2);
 
 // TLAS
 RaytracingAS g_scene : register (t0);
@@ -63,9 +66,20 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	{
 		const float closestSD = g_rwSDF[DTid];
 
-		float signedDist = q.CommittedRayT();
-		signedDist = q.CommittedTriangleFrontFace() ? signedDist : -signedDist;
+		const float dist = q.CommittedRayT();
+		const float signedDist = q.CommittedTriangleFrontFace() ? dist : -dist;
 
-		g_rwSDF[DTid] = abs(signedDist) < abs(closestSD) ? signedDist : closestSD;
+		if (dist < abs(closestSD))
+		{
+			g_rwSDF[DTid] = signedDist;
+
+			const float3 voxel = mul(float3(0.0, 1.0, 0.0), (float3x3)g_world);
+
+			if (dist < length(voxel))
+			{
+				g_rwIds[DTid] = ((q.CommittedInstanceIndex() << PRIMITIVE_BITS) | q.CommittedPrimitiveIndex()) + 1;
+				g_rwBaryc[DTid] = q.CommittedTriangleBarycentrics();
+			}
+		}
 	}
 }

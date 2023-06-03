@@ -133,6 +133,9 @@
     <FxCompile Include="Content\Shaders\VSVisibility.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
+    <FxCompile Include="Content\Shaders\CSShadeVolume.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="Content\Shaders\BRDFModels.hlsli">
@@ -148,6 +151,9 @@
       <Filter>Shaders</Filter>
     </None>
     <None Include="Content\Shaders\DecodeVisibility.hlsli">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="Content\Shaders\ConeTrace.hlsli">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>

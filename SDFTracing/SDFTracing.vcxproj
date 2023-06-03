@@ -164,6 +164,12 @@ COPY /Y "$(ProjectDir)XUSG\Bin\$(Platform)\$(Configuration)\*.dll" "$(ProjectDir
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/T cs_6_5</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/T cs_6_5</AdditionalOptions>
     </FxCompile>
+    <FxCompile Include="Content\Shaders\CSShadeVolume.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+    </FxCompile>
     <FxCompile Include="Content\Shaders\PSShade.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
@@ -191,6 +197,7 @@ COPY /Y "$(ProjectDir)XUSG\Bin\$(Platform)\$(Configuration)\*.dll" "$(ProjectDir
   </ItemGroup>
   <ItemGroup>
     <None Include="Content\Shaders\BRDFModels.hlsli" />
+    <None Include="Content\Shaders\ConeTrace.hlsli" />
     <None Include="Content\Shaders\D3DX_DXGIFormatConvert.inl" />
     <None Include="Content\Shaders\DecodeVisibility.hlsli" />
     <None Include="Content\Shaders\MonteCarlo.hlsli" />

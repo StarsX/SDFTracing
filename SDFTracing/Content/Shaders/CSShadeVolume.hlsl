@@ -7,14 +7,8 @@
 #include "ConeTrace.hlsli"
 
 //--------------------------------------------------------------------------------------
-// Structures
+// Structure
 //--------------------------------------------------------------------------------------
-struct PSIn
-{
-	float4	Pos	: SV_POSITION;
-	float2	UV : TEXCOORD;
-};
-
 struct LightSource
 {
 	float4 Min;
@@ -26,14 +20,31 @@ struct LightSource
 //--------------------------------------------------------------------------------------
 // Texture and buffer
 //--------------------------------------------------------------------------------------
-Texture3D<float> g_txSDF : register (t2, space0);
-StructuredBuffer<LightSource> g_lightSources : register (t3, space0);
-Texture3D<float3> g_txIrradiance : register (t4, space0);
+RWTexture3D<float3> g_rwIrradiance;
 
-min16float4 main(PSIn input) : SV_TARGET
+Texture3D<uint> g_txIds		: register (t0, space0);
+Texture3D<float> g_txSDF	: register (t2, space0);
+StructuredBuffer<LightSource> g_lightSources : register (t3, space0);
+Texture3D<float2> g_txBaryc	: register (t4, space0);
+
+[numthreads(4, 4, 4)]
+void main(uint3 DTid : SV_DispatchThreadID)
 {
-	const Attrib attrib = GetPixelAttrib(input.Pos.xy, input.UV, g_viewProj);
-	if (attrib.MeshId == 0xffffffff) discard;
+	uint id = g_txIds[DTid];
+	if (id <= 0) return;
+	--id;
+
+	const float2 barycentrics = g_txBaryc[DTid];
+
+	// Decode visibility
+	const Visibility vis = DecodeVisibility(id);
+
+	// Fetch vertices
+	Vertex vertices[3];
+	getVertices(vertices, vis.MeshId, vis.PrimId);
+
+	// Interpolate triangle sample attributes
+	const Attrib attrib = interpAttrib(vis.MeshId, vertices, barycentrics);
 
 	float3 gridSize;
 	g_txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
@@ -81,21 +92,10 @@ min16float4 main(PSIn input) : SV_TARGET
 		}
 	}
 
-	// AO
-	ray.Direction = N;
-	ray.TMin = 0.0;
-	ray.TMax = g_volumeWorld[1].y * 0.4;
-
-	const float3 tr = TraceAO(g_txSDF, ray, 2.25);
-
 	const min16float3 albedo = attrib.Emissive > 0.0 ? 0.0 : attrib.Color;
 	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
+	radiance = albedo / PI * radiance + emissive;
 
-	const min16float3 ambient = PI;
-	radiance += ambient * min16float(tr.z);
-	//radiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
-	const min16float3 result = albedo / PI * radiance + emissive;
-
-	return min16float4(result / (result + 0.5), 1.0);
-	//return min16float4(input.Albedo + input.Emissive, 1.0);
+	g_rwIrradiance[DTid] = radiance * PI;
+	//g_rwIrradiance[DTid] = input.Albedo + input.Emissive;
 }

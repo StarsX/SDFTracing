@@ -67,6 +67,7 @@ protected:
 
 	void buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::DepthStencil* pDepthStencil);
+	void renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::RenderTarget* pRenderTarget);
 
 	void calcMeshWorldAABB(DirectX::XMVECTOR pAABB[2], uint32_t meshId) const;
@@ -80,6 +81,9 @@ protected:
 	XUSG::RayTracing::TopLevelAS::uptr m_topLevelAS;
 	XUSG::Resource::uptr		m_instances;
 	XUSG::Texture3D::uptr		m_globalSDF;
+	XUSG::Texture3D::uptr		m_idVolume;
+	XUSG::Texture3D::uptr		m_barycVolume;
+	XUSG::Texture3D::uptr		m_irradiance;
 	XUSG::RenderTarget::uptr	m_visibility;
 	XUSG::ConstantBuffer::uptr	m_cbPerFrame;
 	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
@@ -89,6 +93,7 @@ protected:
 	enum ShaderIndex : uint8_t
 	{
 		CS_BUILD_SDF,
+		CS_SHADE_VOLUME,
 
 		VS_VISIBILITY,
 		VS_SCREEN_QUAD,
