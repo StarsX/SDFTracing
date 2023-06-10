@@ -10,7 +10,7 @@ float3 computeDirectionUS(float2 xi)
 	const float phi = 2.0 * PI * xi.x;
 
 	// Only near the specular direction according to the roughness for importance sampling
-	const float cosTheta = 1.0 - 2.0 * xi.y;;
+	const float cosTheta = 1.0 - 2.0 * xi.y;
 	const float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 
 	return float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);

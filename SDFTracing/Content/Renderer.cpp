@@ -117,9 +117,11 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	XUSG_N_RETURN(m_barycVolume->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R16G16_UNORM,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"BarycentricsVolume"), false);
 
+	const uint32_t gridSize = GRID_SIZE;
+	const auto mipCount = CalculateMipLevels(gridSize, gridSize, gridSize);
 	m_irradiance = Texture3D::MakeUnique();
-	XUSG_N_RETURN(m_irradiance->Create(pDevice, GRID_SIZE, GRID_SIZE, GRID_SIZE, Format::R11G11B10_FLOAT,
-		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"IrradianceVolume"), false);
+	XUSG_N_RETURN(m_irradiance->Create(pDevice, gridSize, gridSize, gridSize, Format::R16G16B16A16_FLOAT,
+		ResourceFlag::ALLOW_UNORDERED_ACCESS, mipCount, MemoryFlag::NONE, L"IrradianceVolume"), false);
 
 	// Allocate dynamic mesh buffer
 	m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
@@ -194,6 +196,7 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 	
 	visibility(pCommandList, frameIndex, pDepthStencil);
 	renderVolume(pCommandList, frameIndex);
+	pCommandList->GenerateMips(m_irradiance.get(), LINEAR_CLAMP);
 	render(pCommandList, frameIndex, pRenderTarget);
 }
 

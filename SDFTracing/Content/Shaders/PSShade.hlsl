@@ -28,7 +28,7 @@ struct LightSource
 //--------------------------------------------------------------------------------------
 Texture3D<float> g_txSDF : register (t2, space0);
 StructuredBuffer<LightSource> g_lightSources : register (t3, space0);
-Texture3D<float3> g_txIrradiance : register (t4, space0);
+Texture3D g_txIrradiance : register (t4, space0);
 
 min16float4 main(PSIn input) : SV_TARGET
 {
@@ -46,7 +46,14 @@ min16float4 main(PSIn input) : SV_TARGET
 	ray.TMin = voxel;
 	const float3 N = normalize(mul(attrib.Nrm, (float3x3)matrices.WorldIT));
 
-	min16float3 radiance = 0.0;
+#if 0
+	float3 pos = mul(float4(ray.Origin, 1.0), g_volumeWorldI);
+	const float3 uvw = pos * 0.5 + 0.5;
+	float3 irr = g_txIrradiance.SampleLevel(g_sampler, uvw, 0.0);
+	return min16float4(irr / (irr + 0.5), 1.0);
+#endif
+
+	min16float3 irradiance = 0.0;
 
 	// Shadow
 	uint lightSourceCount, lightSourceStride;
@@ -77,7 +84,7 @@ min16float4 main(PSIn input) : SV_TARGET
 
 			const float3 tr = TraceCone(g_txSDF, ray, coneRadius);
 			const min16float3 lightColor = min16float3(lightSource.Emissive.xyz * lightSource.Emissive.w);
-			radiance += NoL * lightColor * min16float(tr.z);
+			irradiance += NoL * lightColor * min16float(tr.z);
 		}
 	}
 
@@ -91,11 +98,11 @@ min16float4 main(PSIn input) : SV_TARGET
 	const min16float3 albedo = attrib.Emissive > 0.0 ? 0.0 : attrib.Color;
 	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
 
-	const min16float3 ambient = PI;
-	radiance += ambient * min16float(tr.z);
-	//radiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
-	const min16float3 result = albedo / PI * radiance + emissive;
+	//const min16float3 ambient = PI;
+	//irradiance += ambient * min16float(tr.z);
+	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
+	const min16float3 radiance = albedo / PI * irradiance + emissive;
 
-	return min16float4(result / (result + 0.5), 1.0);
-	//return min16float4(input.Albedo + input.Emissive, 1.0);
+	return min16float4(radiance / (radiance + 0.5), 1.0);
+	//return min16float4(albedo + emissive, 1.0);
 }

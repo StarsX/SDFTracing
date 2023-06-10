@@ -20,7 +20,7 @@ struct LightSource
 //--------------------------------------------------------------------------------------
 // Texture and buffer
 //--------------------------------------------------------------------------------------
-RWTexture3D<float3> g_rwIrradiance;
+RWTexture3D<float4> g_rwIrradiance;
 
 Texture3D<uint> g_txIds		: register (t0, space0);
 Texture3D<float> g_txSDF	: register (t2, space0);
@@ -30,14 +30,13 @@ Texture3D<float2> g_txBaryc	: register (t4, space0);
 [numthreads(4, 4, 4)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-	uint id = g_txIds[DTid];
-	if (id <= 0) return;
-	--id;
+	uint encodedId = g_txIds[DTid];
+	if (encodedId <= 0) return;
 
 	const float2 barycentrics = g_txBaryc[DTid];
 
 	// Decode visibility
-	const Visibility vis = DecodeVisibility(id);
+	const Visibility vis = DecodeVisibility(encodedId);
 
 	// Fetch vertices
 	Vertex vertices[3];
@@ -57,7 +56,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	ray.TMin = voxel;
 	const float3 N = normalize(mul(attrib.Nrm, (float3x3)matrices.WorldIT));
 
-	min16float3 radiance = 0.0;
+	min16float3 irradiance = 0.0;
 
 	// Shadow
 	uint lightSourceCount, lightSourceStride;
@@ -88,14 +87,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 			const float3 tr = TraceCone(g_txSDF, ray, coneRadius);
 			const min16float3 lightColor = min16float3(lightSource.Emissive.xyz * lightSource.Emissive.w);
-			radiance += NoL * lightColor * min16float(tr.z);
+			irradiance += NoL * lightColor * min16float(tr.z);
 		}
 	}
 
 	const min16float3 albedo = attrib.Emissive > 0.0 ? 0.0 : attrib.Color;
 	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
-	radiance = albedo / PI * radiance + emissive;
 
-	g_rwIrradiance[DTid] = radiance * PI;
-	//g_rwIrradiance[DTid] = input.Albedo + input.Emissive;
+	g_rwIrradiance[DTid] = float4(albedo * irradiance + emissive, 1.0);
+	//g_rwIrradiance[DTid] = float4(albedo + emissive, 1.0);
 }
