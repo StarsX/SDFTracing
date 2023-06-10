@@ -6,6 +6,10 @@
 #include "DecodeVisibility.hlsli"
 #include "ConeTrace.hlsli"
 
+#ifndef _LIT_INDIRECT_
+#define _LIT_INDIRECT_ 1
+#endif
+
 //--------------------------------------------------------------------------------------
 // Structures
 //--------------------------------------------------------------------------------------
@@ -37,7 +41,7 @@ min16float4 main(PSIn input) : SV_TARGET
 
 	float3 gridSize;
 	g_txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
-	const float voxel = 2.0 * g_volumeWorld[1].y / gridSize.y;
+	const float voxel = 2.0 * length(g_volumeWorld[1]) / gridSize.y;
 
 	const PerObject matrices = g_matrices[attrib.MeshId];
 
@@ -47,9 +51,10 @@ min16float4 main(PSIn input) : SV_TARGET
 	const float3 N = normalize(mul(attrib.Nrm, (float3x3)matrices.WorldIT));
 
 #if 0
+	// Test irradiance map
 	float3 pos = mul(float4(ray.Origin, 1.0), g_volumeWorldI);
 	const float3 uvw = pos * 0.5 + 0.5;
-	float3 irr = g_txIrradiance.SampleLevel(g_sampler, uvw, 0.0);
+	float3 irr = g_txIrradiance.SampleLevel(g_sampler, uvw, 0.0).xyz;
 	return min16float4(irr / (irr + 0.5), 1.0);
 #endif
 
@@ -90,17 +95,19 @@ min16float4 main(PSIn input) : SV_TARGET
 
 	// AO
 	ray.Direction = N;
-	ray.TMin = 0.0;
-	ray.TMax = g_volumeWorld[1].y * 0.4;
+	ray.TMin = voxel;
+	ray.TMax = length(g_volumeWorld[1]) * 0.4;
 
+#if _LIT_INDIRECT_
+	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
+#else
 	const float3 tr = TraceAO(g_txSDF, ray, 2.25);
+	const float4 ambient = g_txIrradiance.SampleLevel(g_sampler, 0.5, 16.0);
+	irradiance += min16float3(ambient.xyz / ambient.w) * min16float(tr.z);
+#endif
 
 	const min16float3 albedo = attrib.Emissive > 0.0 ? 0.0 : attrib.Color;
 	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
-
-	//const min16float3 ambient = PI;
-	//irradiance += ambient * min16float(tr.z);
-	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
 	const min16float3 radiance = albedo / PI * irradiance + emissive;
 
 	return min16float4(radiance / (radiance + 0.5), 1.0);

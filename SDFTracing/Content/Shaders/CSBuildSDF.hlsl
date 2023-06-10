@@ -73,9 +73,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		{
 			g_rwSDF[DTid] = signedDist;
 
-			const float3 voxel = mul(float3(0.0, 1.0, 0.0), (float3x3)g_world);
-
-			if (dist < length(voxel))
+			const float voxel = 2.0 * length(g_world[1]) / gridSize.y;
+			if (dist < voxel * 0.5 * sqrt(2.0))
 			{
 				g_rwIds[DTid] = ((q.CommittedInstanceIndex() << PRIMITIVE_BITS) | q.CommittedPrimitiveIndex()) + 1;
 				g_rwBaryc[DTid] = q.CommittedTriangleBarycentrics();
