@@ -51,9 +51,9 @@ float3 TraceCone(Texture3D<float> txSDF, RayDesc ray, float coneRadius)
 }
 
 //--------------------------------------------------------------------------------------
-// https://www.shadertoy.com/view/4sdGWN
+// Based on https://www.shadertoy.com/view/4sdGWN
 //--------------------------------------------------------------------------------------
-float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
+float3 TraceAO(Texture3D<float> txSDF, RayDesc ray)
 {
 	const uint n = 32;
 	const float nInv = 1.0 / n;
@@ -75,7 +75,7 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 		const float3 uvw = pos * 0.5 + 0.5;
 		r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
 
-		occ += (t - max(r, 0.0)) / lMax * falloff;
+		occ += (t - max(r, 0.0)) / t;
 	}
 
 	const float ao = saturate(1.0 - occ * nInv);
@@ -83,14 +83,14 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 	return float3(t, r, ao);
 }
 
-min16float4 TraceIndirect(Texture3D<float> txSDF, Texture3D txIrradiance, RayDesc ray, float falloff)
+min16float4 TraceIndirect(Texture3D<float> txSDF, Texture3D txIrradiance, RayDesc ray)
 {
 	float3 gridSize;
 	txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
-	float4 ambient = txIrradiance.SampleLevel(g_sampler, 0.5, 12.0);
+	float4 ambient = txIrradiance.SampleLevel(g_sampler, 0.5, 16.0);
 	ambient.xyz /= ambient.w;
 
-	const uint n = 48;
+	const uint n = 32;
 	const float lMax = ray.TMax - ray.TMin;
 
 	float t = ray.TMin, r;
@@ -113,7 +113,7 @@ min16float4 TraceIndirect(Texture3D<float> txSDF, Texture3D txIrradiance, RayDes
 	}
 
 	min16float4 radiosity = 0.0;
-	//float occ = 0.0;
+	min16float occ = 0.0;
 	for (i = 0; i < n; ++i)
 	{
 		t = ray.TMin + hash(i) * lMax;
@@ -127,20 +127,20 @@ min16float4 TraceIndirect(Texture3D<float> txSDF, Texture3D txIrradiance, RayDes
 		r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
 		r = max(r, 0.0);
 
-		const float oc = (t - r) / lMax * falloff;
-		//occ += oc;
+		const float oc = (t - r) / t;
+		occ += min16float(oc);
 
 		float4 irradiance = txIrradiance.SampleLevel(g_sampler, uvw, level);
 		irradiance.xyz = irradiance.w ? irradiance.xyz / irradiance.w : irradiance.xyz;
-		irradiance.xyz = lerp(ambient.xyz, irradiance.xyz, oc);
+		irradiance.xyz *= oc;
 		irradiance.w = irradiance.w ? 1.0 : 0.0;
 		//const float NoL = saturate(dot(ray.Direction, dir));
-		radiosity += min16float4(irradiance);// *min16float(NoL);
+		radiosity += min16float4(irradiance);// * min16float(NoL);
 	}
 
-	//const float ao = saturate(1.0 - occ / n);
+	const min16float ao = saturate(1.0 - occ / n);
 	radiosity.xyz /= radiosity.w;
-	//radiosity.xyz = lerp(radiosity.xyz, ambient.xyz, ao);
+	radiosity.xyz += min16float3(ambient.xyz) * ao;
 
 	return min16float4(radiosity.xyz, t);
 }

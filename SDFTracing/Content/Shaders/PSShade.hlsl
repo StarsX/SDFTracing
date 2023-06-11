@@ -95,13 +95,13 @@ min16float4 main(PSIn input) : SV_TARGET
 
 	// AO
 	ray.Direction = N;
-	ray.TMin = 0.0;
+	ray.TMin = voxel;
 	ray.TMax = length(g_volumeWorld[1]) * 0.5;
 
 #if _LIT_INDIRECT_
-	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;
+	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray).xyz;
 #else
-	const float3 tr = TraceAO(g_txSDF, ray, 2.25);
+	const float3 tr = TraceAO(g_txSDF, ray);
 	const float4 ambient = g_txIrradiance.SampleLevel(g_sampler, 0.5, 16.0);
 	irradiance += min16float3(ambient.xyz / ambient.w) * min16float(tr.z);
 #endif
