@@ -95,8 +95,8 @@ min16float4 main(PSIn input) : SV_TARGET
 
 	// AO
 	ray.Direction = N;
-	ray.TMin = voxel;
-	ray.TMax = length(g_volumeWorld[1]) * 0.4;
+	ray.TMin = 0.0;
+	ray.TMax = length(g_volumeWorld[1]) * 0.5;
 
 #if _LIT_INDIRECT_
 	irradiance += TraceIndirect(g_txSDF, g_txIrradiance, ray, 2.25).xyz;

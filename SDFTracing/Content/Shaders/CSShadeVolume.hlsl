@@ -31,7 +31,15 @@ Texture3D<float2> g_txBaryc	: register (t4, space0);
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	uint encodedId = g_txIds[DTid];
-	if (encodedId <= 0) return;
+	if (encodedId <= 0)
+	{
+		uint3 gridSize;
+		g_txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
+		if (any(DTid == 0) || any(DTid + 1 >= gridSize))
+			g_rwIrradiance[DTid] = float4(0.0.xxx, 1.0);
+
+		return;
+	}
 
 	const float2 barycentrics = g_txBaryc[DTid];
 

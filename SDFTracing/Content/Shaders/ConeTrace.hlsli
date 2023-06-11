@@ -57,7 +57,7 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 {
 	const uint n = 32;
 	const float nInv = 1.0 / n;
-	const float rad = 1.0 - nInv; // Hemispherical factor (self occlusion correction)
+	//const float rad = 1.0 - nInv; // Hemispherical factor (self occlusion correction)
 	const float lMax = ray.TMax - ray.TMin;
 
 	float t = ray.TMin, r = 0.0;
@@ -66,7 +66,8 @@ float3 TraceAO(Texture3D<float> txSDF, RayDesc ray, float falloff)
 	{
 		t = ray.TMin + hash(i) * lMax;
 		const float2 xi = float2(hash(t + 1.0), hash(t + 2.0));
-		const float3 dir = normalize(ray.Direction + computeDirectionHS(ray.Direction, xi) * rad); // mix direction with the normal
+		const float3 dir = computeDirectionCos(ray.Direction, xi);
+		//const float3 dir = normalize(ray.Direction + computeDirectionHS(ray.Direction, xi) * rad); // mix direction with the normal
 
 		float3 pos = ray.Origin + t * dir;
 		pos = mul(float4(pos, 1.0), g_volumeWorldI);
@@ -90,36 +91,56 @@ min16float4 TraceIndirect(Texture3D<float> txSDF, Texture3D txIrradiance, RayDes
 	ambient.xyz /= ambient.w;
 
 	const uint n = 48;
-	const float nInv = 1.0 / n;
-	const float rad = 1.0 - nInv; // Hemispherical factor (self occlusion correction)
 	const float lMax = ray.TMax - ray.TMin;
 
-	float t = ray.TMin, r = 0.0;
-	min16float4 radiosity = 0.0;
+	float t = ray.TMin, r;
+	float level = 0.0;
 	for (uint i = 0; i < n; ++i)
 	{
 		t = ray.TMin + hash(i) * lMax;
 		const float2 xi = float2(hash(t + 1.0), hash(t + 2.0));
-		const float3 dir = normalize(ray.Direction + computeDirectionCos(ray.Direction, xi)); // mix direction with the normal
+		const float3 dir = computeDirectionCos(ray.Direction, xi);
 
 		float3 pos = ray.Origin + t * dir;
 		pos = mul(float4(pos, 1.0), g_volumeWorldI);
 
 		const float3 uvw = pos * 0.5 + 0.5;
 		r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
+		r = max(r, 0.0);
+		r *= length(g_volumeWorldI[1]) * 0.5 * gridSize.y;
 
-		const float oc = (t - max(r, 0.0)) / lMax * falloff;
-		const float3 vr = mul(float3(0.0, r, 0.0), (float3x3)g_volumeWorldI) * 0.5 * gridSize;
+		level = max(log2(r), level);
+	}
 
-		//const float level = log2(length(vr)) + 3.0;
-		const float level = 4.5;
+	min16float4 radiosity = 0.0;
+	//float occ = 0.0;
+	for (i = 0; i < n; ++i)
+	{
+		t = ray.TMin + hash(i) * lMax;
+		const float2 xi = float2(hash(t + 1.0), hash(t + 2.0));
+		const float3 dir = computeDirectionCos(ray.Direction, xi);
+
+		float3 pos = ray.Origin + t * dir;
+		pos = mul(float4(pos, 1.0), g_volumeWorldI);
+
+		const float3 uvw = pos * 0.5 + 0.5;
+		r = txSDF.SampleLevel(g_sampler, uvw, 0.0);
+		r = max(r, 0.0);
+
+		const float oc = (t - r) / lMax * falloff;
+		//occ += oc;
+
 		float4 irradiance = txIrradiance.SampleLevel(g_sampler, uvw, level);
 		irradiance.xyz = irradiance.w ? irradiance.xyz / irradiance.w : irradiance.xyz;
 		irradiance.xyz = lerp(ambient.xyz, irradiance.xyz, oc);
 		irradiance.w = irradiance.w ? 1.0 : 0.0;
-		if (any(abs(pos) > 1.0)) irradiance = float4(0.0.xxx, 1.0);
-		radiosity += min16float4(irradiance);
+		//const float NoL = saturate(dot(ray.Direction, dir));
+		radiosity += min16float4(irradiance);// *min16float(NoL);
 	}
 
-	return min16float4(radiosity.xyz / radiosity.w, t);
+	//const float ao = saturate(1.0 - occ / n);
+	radiosity.xyz /= radiosity.w;
+	//radiosity.xyz = lerp(radiosity.xyz, ambient.xyz, ao);
+
+	return min16float4(radiosity.xyz, t);
 }
