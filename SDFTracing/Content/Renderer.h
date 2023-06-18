@@ -68,7 +68,8 @@ protected:
 	void buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::DepthStencil* pDepthStencil);
 	void renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
-	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::RenderTarget* pRenderTarget);
+	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
+	void antiAlias(XUSG::EZ::CommandList* pCommandList, XUSG::RenderTarget* pRenderTarget);
 
 	void calcMeshWorldAABB(DirectX::XMVECTOR pAABB[2], uint32_t meshId) const;
 
@@ -85,6 +86,7 @@ protected:
 	XUSG::Texture3D::uptr		m_barycVolume;
 	XUSG::Texture3D::uptr		m_irradiance;
 	XUSG::RenderTarget::uptr	m_visibility;
+	XUSG::Texture::uptr			m_outputView;
 	XUSG::ConstantBuffer::uptr	m_cbPerFrame;
 	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
 	XUSG::StructuredBuffer::uptr m_lightSources[FrameCount];
@@ -94,12 +96,13 @@ protected:
 	{
 		CS_BUILD_SDF,
 		CS_SHADE_VOLUME,
+		CS_SHADE,
 
 		VS_VISIBILITY,
 		VS_SCREEN_QUAD,
 
 		PS_VISIBILITY,
-		PS_SHADE,
+		PS_FXAA,
 
 		NUM_SHADER
 	};
@@ -108,6 +111,6 @@ protected:
 	XUSG::Blob m_shaders[NUM_SHADER];
 
 	DirectX::XMFLOAT3X4 m_volumeWorld;
-	DirectX::XMFLOAT2 m_viewport;
+	DirectX::XMUINT2 m_viewport;
 	uint32_t m_frameIndex;
 };

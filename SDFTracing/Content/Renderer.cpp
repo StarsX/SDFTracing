@@ -141,14 +141,19 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 
 bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t height)
 {
-	m_viewport.x = static_cast<float>(width);
-	m_viewport.y = static_cast<float>(height);
+	m_viewport.x = width;
+	m_viewport.y = height;
 
-	// Create texture
+	// Create textures
 	m_visibility = RenderTarget::MakeUnique();
+	XUSG_N_RETURN(m_visibility->Create(pDevice, width, height, Format::R32_UINT, 1,
+		ResourceFlag::NONE, 1, 1, nullptr, false, MemoryFlag::NONE, L"Visibility"), false);
 
-	return m_visibility->Create(pDevice, width, height, Format::R32_UINT, 1,
-		ResourceFlag::NONE, 1, 1, nullptr, false, MemoryFlag::NONE, L"Visibility");
+	m_outputView = Texture::MakeUnique();
+	XUSG_N_RETURN(m_outputView->Create(pDevice, width, height, Format::R8G8B8A8_UNORM, 1,
+		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, 1, false, MemoryFlag::NONE, L"OutputView"), false);
+
+	return true;
 }
 
 void Renderer::UpdateFrame(uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
@@ -197,7 +202,8 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 	visibility(pCommandList, frameIndex, pDepthStencil);
 	renderVolume(pCommandList, frameIndex);
 	pCommandList->GenerateMips(m_irradiance.get(), LINEAR_CLAMP);
-	render(pCommandList, frameIndex, pRenderTarget);
+	render(pCommandList, frameIndex);
+	antiAlias(pCommandList, pRenderTarget);
 }
 
 bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders,
@@ -284,6 +290,9 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSShadeVolume.cso"), false);
 	m_shaders[CS_SHADE_VOLUME] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
 
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSShade.cso"), false);
+	m_shaders[CS_SHADE] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
+
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::VS, vsIndex, L"VSVisibility.cso"), false);
 	m_shaders[VS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::VS, vsIndex++);
 
@@ -293,8 +302,8 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSVisibility.cso"), false);
 	m_shaders[PS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
-	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSShade.cso"), false);
-	m_shaders[PS_SHADE] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSFXAA.cso"), false);
+	m_shaders[PS_FXAA] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
 	return true;
 }
@@ -404,8 +413,8 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 1, meshCount, srvs.data());
 
 	// Set viewport
-	Viewport viewport(0.0f, 0.0f, m_viewport.x, m_viewport.y);
-	RectRange scissorRect(0, 0, static_cast<long>(m_viewport.x), static_cast<long>(m_viewport.y));
+	const Viewport viewport(0.0f, 0.0f, static_cast<float>(m_viewport.x), static_cast<float>(m_viewport.y));
+	const RectRange scissorRect(0, 0, m_viewport.x, m_viewport.y);
 	pCommandList->RSSetViewports(1, &viewport);
 	pCommandList->RSSetScissorRects(1, &scissorRect);
 
@@ -473,28 +482,20 @@ void Renderer::renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIn
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
 }
 
-void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, RenderTarget* pRenderTarget)
+void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex)
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
 	// Set pipeline state
-	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_SCREEN_QUAD]);
-	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_SHADE]);
-	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEPTH_STENCIL_NONE);
-	pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
-	pCommandList->OMSetBlendState(Graphics::BlendPreset::DEFAULT_OPAQUE);
+	pCommandList->SetComputeShader(m_shaders[CS_SHADE]);
 
-	// Set render target
-	const auto rtv = XUSG::EZ::GetRTV(pRenderTarget);
-	pCommandList->OMSetRenderTargets(1, &rtv, nullptr);
-
-	// Clear render target
-	float clearColor[4] = { 0.2f, 0.2f, 0.2f, 0.0f };
-	pCommandList->ClearRenderTargetView(rtv, clearColor);
+	// Set UAV
+	const auto uav = XUSG::EZ::GetUAV(m_outputView.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::UAV, 0, 1, &uav);
 
 	// Set CBV
 	const auto cbv = XUSG::EZ::GetCBV(m_cbPerFrame.get(), frameIndex);
-	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::CBV, 0, 1, &cbv);
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::CBV, 0, 1, &cbv);
 
 	// Set SRVs
 	{
@@ -506,26 +507,55 @@ void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, R
 			XUSG::EZ::GetSRV(m_lightSources[frameIndex].get()),
 			XUSG::EZ::GetSRV(m_irradiance.get())
 		};
-		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
+		pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 	}
 	
 	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
 
 	// Set index buffers
 	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].IndexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
 
 	// Set vertex buffers
 	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+
+	// Set sampler
+	const auto sampler = SamplerPreset::LINEAR_CLAMP;
+	pCommandList->SetSamplerStates(Shader::Stage::CS, 0, 1, &sampler);
+
+	pCommandList->Dispatch(XUSG_DIV_UP(m_viewport.x, 8), XUSG_DIV_UP(m_viewport.y, 8), 1);
+}
+
+void Renderer::antiAlias(XUSG::EZ::CommandList* pCommandList, RenderTarget* pRenderTarget)
+{
+	// Set pipeline state
+	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_SCREEN_QUAD]);
+	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_FXAA]);
+	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEPTH_STENCIL_NONE);
+	pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
+	pCommandList->OMSetBlendState(Graphics::BlendPreset::DEFAULT_OPAQUE);
+
+	// Set render target
+	const auto rtv = XUSG::EZ::GetRTV(pRenderTarget);
+	pCommandList->OMSetRenderTargets(1, &rtv, nullptr);
+
+	// Set SRVs
+	{
+		const XUSG::EZ::ResourceView srvs[] =
+		{
+			XUSG::EZ::GetSRV(m_outputView.get())
+		};
+		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
+	}
 
 	// Set sampler
 	const auto sampler = SamplerPreset::LINEAR_CLAMP;
 	pCommandList->SetSamplerStates(Shader::Stage::PS, 0, 1, &sampler);
 
 	// Set viewport
-	Viewport viewport(0.0f, 0.0f, m_viewport.x, m_viewport.y);
-	RectRange scissorRect(0, 0, static_cast<long>(m_viewport.x), static_cast<long>(m_viewport.y));
+	const Viewport viewport(0.0f, 0.0f, static_cast<float>(m_viewport.x), static_cast<float>(m_viewport.y));
+	const RectRange scissorRect(0, 0, m_viewport.x, m_viewport.y);
 	pCommandList->RSSetViewports(1, &viewport);
 	pCommandList->RSSetScissorRects(1, &scissorRect);
 

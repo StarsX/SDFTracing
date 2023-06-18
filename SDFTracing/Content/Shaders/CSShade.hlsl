@@ -11,14 +11,8 @@
 #endif
 
 //--------------------------------------------------------------------------------------
-// Structures
+// Structure
 //--------------------------------------------------------------------------------------
-struct PSIn
-{
-	float4	Pos	: SV_POSITION;
-	float2	UV : TEXCOORD;
-};
-
 struct LightSource
 {
 	float4 Min;
@@ -30,14 +24,26 @@ struct LightSource
 //--------------------------------------------------------------------------------------
 // Texture and buffer
 //--------------------------------------------------------------------------------------
+RWTexture2D<float4> g_rwRenderTarget;
+
 Texture3D<float> g_txSDF : register (t2, space0);
 StructuredBuffer<LightSource> g_lightSources : register (t3, space0);
 Texture3D g_txIrradiance : register (t4, space0);
 
-min16float4 main(PSIn input) : SV_TARGET
+[numthreads(8, 8, 1)]
+void main(uint2 DTid : SV_DispatchThreadID)
 {
-	const Attrib attrib = GetPixelAttrib(input.Pos.xy, input.UV, g_viewProj);
-	if (attrib.MeshId == 0xffffffff) discard;
+	float2 imageSize;
+	g_rwRenderTarget.GetDimensions(imageSize.x, imageSize.y);
+
+	const float2 uv = (DTid + 0.5) / imageSize;
+	const Attrib attrib = GetPixelAttrib(DTid, uv, g_viewProj);
+	if (attrib.MeshId == 0xffffffff)
+	{
+		g_rwRenderTarget[DTid] = float4(0.2.xxx, 0.0);
+
+		return;
+	}
 
 	float3 gridSize;
 	g_txSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
@@ -110,6 +116,6 @@ min16float4 main(PSIn input) : SV_TARGET
 	const min16float3 emissive = attrib.Emissive > 0.0 ? attrib.Color * min16float(attrib.Emissive) : 0.0;
 	const min16float3 radiance = albedo / PI * irradiance + emissive;
 
-	return min16float4(radiance / (radiance + 0.5), 1.0);
-	//return min16float4(albedo + emissive, 1.0);
+	g_rwRenderTarget[DTid] = float4(radiance / (radiance + 0.5), 1.0);
+	//g_rwRenderTarget[DTid] = float4(albedo + emissive, 1.0);
 }

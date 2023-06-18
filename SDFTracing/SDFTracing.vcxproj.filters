@@ -121,9 +121,6 @@
     <FxCompile Include="Content\Shaders\VSScreenQuad.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
-    <FxCompile Include="Content\Shaders\PSShade.hlsl">
-      <Filter>Shaders</Filter>
-    </FxCompile>
     <FxCompile Include="Content\Shaders\CSBuildSDF.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
@@ -134,6 +131,12 @@
       <Filter>Shaders</Filter>
     </FxCompile>
     <FxCompile Include="Content\Shaders\CSShadeVolume.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Content\Shaders\PSFXAA.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Content\Shaders\CSShade.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
   </ItemGroup>
@@ -154,6 +157,9 @@
       <Filter>Shaders</Filter>
     </None>
     <None Include="Content\Shaders\ConeTrace.hlsli">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="Content\Shaders\FXAA.hlsli">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>
