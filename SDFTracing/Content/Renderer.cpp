@@ -52,6 +52,7 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 
 	// Load inputs
 	m_meshes.resize(meshCount);
+	vector<uint32_t> dynamicMeshIds(meshCount);
 	vector<GltfLoader::LightSource> lightSources(0);
 	m_dynamicMeshes.clear();
 	XMVECTOR sceneAABB[2], meshAABB[2];
@@ -59,8 +60,7 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	sceneAABB[1] = XMVectorReplicate(-FLT_MAX);
 	for (auto i = 0u; i < meshCount; ++i)
 	{
-		loadMesh(pCommandList, i, uploaders, pMeshDescs, lightSources);
-		if (pMeshDescs[i].isDynamic) m_dynamicMeshes.push_back({ i });
+		loadMesh(pCommandList, i, uploaders, pMeshDescs, dynamicMeshIds, lightSources);
 
 		calcMeshWorldAABB(meshAABB, i);
 		sceneAABB[0] = XMVectorMin(meshAABB[0], sceneAABB[0]);
@@ -124,13 +124,27 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, mipCount, MemoryFlag::NONE, L"IrradianceVolume"), false);
 
 	// Allocate dynamic mesh buffer
-	m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
-	XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()),
-		sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr,
-		MemoryFlag::NONE, L"DynamicMeshes"), false); // create dynamic meshes GPU
-	uploaders.emplace_back(Resource::MakeUnique());
-	XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
-		m_dynamicMeshes.data(), m_dynamicMeshes.size()*sizeof(DynamicMesh)), false);
+	{
+		m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
+		XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()),
+			sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr,
+			MemoryFlag::NONE, L"DynamicMeshes"), false); // create dynamic meshes GPU
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+			m_dynamicMeshes.data(), m_dynamicMeshes.size() * sizeof(DynamicMesh)), false);
+	}
+
+	{
+		m_dynamicMeshIds = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(m_dynamicMeshIds->Create(pDevice, meshCount, sizeof(uint32_t),
+			ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE,
+			L"DynamicMeshIds"), false);
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		XUSG_N_RETURN(m_dynamicMeshIds->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+			dynamicMeshIds.data(), sizeof(uint32_t) * meshCount), false);
+	}
 
 	// Build acceleration structures and create shaders
 	XUSG_N_RETURN(buildAccelerationStructures(pCommandList, pGeometries), false);
@@ -207,10 +221,10 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 }
 
 bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders,
-	const MeshDesc* pMeshDescs, vector<GltfLoader::LightSource>& lightSources)
+	const MeshDesc* pMeshDescs, vector<uint32_t>& dynamicMeshIds, vector<GltfLoader::LightSource>& lightSources)
 {
 	GltfLoader loader;
-	if (!loader.Import(pMeshDescs[meshId].fileName.c_str(), true, true, true, true)) return false;
+	if (!loader.Import(pMeshDescs[meshId].FileName.c_str(), true, true, true, true)) return false;
 
 	const auto meshLightSources = loader.GetLightSources();
 	lightSources.insert(lightSources.end(), meshLightSources.cbegin(), meshLightSources.cend());
@@ -219,12 +233,22 @@ bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, ve
 
 	XUSG_N_RETURN(createMeshVB(pCommandList, meshId, loader.GetNumVertices(), loader.GetVertexStride(), loader.GetVertices(), uploaders), false);
 	XUSG_N_RETURN(createMeshIB(pCommandList, meshId, loader.GetNumIndices(), loader.GetIndices(), uploaders), false);
-	XUSG_N_RETURN(createMeshCB(pCommandList->GetDevice(), meshId), false);
+	XUSG_N_RETURN(createMeshCB(pCommandList, meshId, uploaders), false);
 
-	m_meshes[meshId].PosScale = pMeshDescs[meshId].posScale;
+	m_meshes[meshId].PosScale = pMeshDescs[meshId].PosScale;
 
 	const auto center = loader.GetCenter();
 	m_meshes[meshId].Bound = XMFLOAT4(center.x, center.y, center.z, loader.GetRadius());
+
+	if (pMeshDescs[meshId].IsDynamic)
+	{
+		// !!! isDynamic bool variable, set bunny true
+		dynamicMeshIds[meshId] = static_cast<uint32_t>(m_dynamicMeshes.size());
+		m_dynamicMeshes.push_back({ meshId });
+	}
+	else dynamicMeshIds[meshId] = UINT32_MAX;
+
+	m_meshes[meshId].Name = pMeshDescs[meshId].FileName.substr(0, pMeshDescs[meshId].FileName.find(".gltf"));
 
 	return true;
 }
@@ -259,15 +283,15 @@ bool Renderer::createMeshIB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId
 	return true;
 }
 
-bool Renderer::createMeshCB(const XUSG::Device* pDevice, uint32_t meshId)
+bool Renderer::createMeshCB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders)
 {
 	m_meshes[meshId].CbPerObject = ConstantBuffer::MakeUnique();
-	XUSG_N_RETURN(m_meshes[meshId].CbPerObject->Create(pDevice, sizeof(uint32_t)), false);
+	XUSG_N_RETURN(m_meshes[meshId].CbPerObject->Create(pCommandList->GetDevice(), sizeof(uint32_t),
+		1, nullptr, MemoryType::DEFAULT, MemoryFlag::NONE, (L"CBMeshId" + to_wstring(meshId)).c_str()), false);
+	uploaders.emplace_back(Resource::MakeUnique());
 
-	const auto pMeshId = static_cast<uint32_t*>(m_meshes[meshId].CbPerObject->Map());
-	*pMeshId = meshId;
-
-	return true;
+	return m_meshes[meshId].CbPerObject->Upload(pCommandList->AsCommandList(),
+		uploaders.back().get(), &meshId, sizeof(meshId));
 }
 
 bool Renderer::createCBs(const XUSG::Device* pDevice)

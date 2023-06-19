@@ -14,9 +14,9 @@ class Renderer
 public:
 	struct MeshDesc
 	{
-		std::string fileName;
-		DirectX::XMFLOAT4 posScale;
-		bool isDynamic;
+		std::string FileName;
+		DirectX::XMFLOAT4 PosScale;
+		bool IsDynamic;
 	};
 
 	Renderer();
@@ -33,6 +33,21 @@ public:
 	static const uint8_t FrameCount = 3;
 
 protected:
+	enum ShaderIndex : uint8_t
+	{
+		CS_BUILD_SDF,
+		CS_SHADE_VOLUME,
+		CS_SHADE,
+
+		VS_VISIBILITY,
+		VS_SCREEN_QUAD,
+
+		PS_VISIBILITY,
+		PS_FXAA,
+
+		NUM_SHADER
+	};
+
 	struct MeshResource
 	{
 		XUSG::ConstantBuffer::uptr CbPerObject;
@@ -45,6 +60,8 @@ protected:
 
 		DirectX::XMFLOAT4 PosScale;
 		DirectX::XMFLOAT4 Bound;
+
+		std::string Name;
 	};
 
 	struct DynamicMesh
@@ -54,12 +71,12 @@ protected:
 
 	bool loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId,
 		std::vector<XUSG::Resource::uptr>& uploaders, const MeshDesc* pMeshDescs,
-		std::vector<XUSG::GltfLoader::LightSource>& lightSources);
+		std::vector<uint32_t>& dynamicMeshIds, std::vector<XUSG::GltfLoader::LightSource>& lightSources);
 	bool createMeshVB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, uint32_t numVert,
 		uint32_t stride, const uint8_t* pData, std::vector<XUSG::Resource::uptr>& uploaders);
 	bool createMeshIB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, uint32_t numIndices,
 		const uint32_t* pData, std::vector<XUSG::Resource::uptr>& uploaders);
-	bool createMeshCB(const XUSG::Device* pDevice, uint32_t meshId);
+	bool createMeshCB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, std::vector<XUSG::Resource::uptr>& uploaders);
 	bool createCBs(const XUSG::Device* pDevice);
 	bool createShaders();
 	bool buildAccelerationStructures(XUSG::RayTracing::EZ::CommandList* pCommandList,
@@ -91,21 +108,7 @@ protected:
 	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
 	XUSG::StructuredBuffer::uptr m_lightSources[FrameCount];
 	XUSG::StructuredBuffer::uptr m_dynamicMeshList;
-
-	enum ShaderIndex : uint8_t
-	{
-		CS_BUILD_SDF,
-		CS_SHADE_VOLUME,
-		CS_SHADE,
-
-		VS_VISIBILITY,
-		VS_SCREEN_QUAD,
-
-		PS_VISIBILITY,
-		PS_FXAA,
-
-		NUM_SHADER
-	};
+	XUSG::StructuredBuffer::uptr m_dynamicMeshIds;
 
 	XUSG::ShaderLib::uptr m_shaderLib;
 	XUSG::Blob m_shaders[NUM_SHADER];
