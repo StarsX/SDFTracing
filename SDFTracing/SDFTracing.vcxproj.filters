@@ -139,6 +139,9 @@
     <FxCompile Include="Content\Shaders\CSShade.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
+    <FxCompile Include="Content\Shaders\CSUpdateSDF.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="Content\Shaders\BRDFModels.hlsli">
@@ -160,6 +163,9 @@
       <Filter>Shaders</Filter>
     </None>
     <None Include="Content\Shaders\FXAA.hlsli">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="Content\Shaders\ImpactRange.hlsli">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>

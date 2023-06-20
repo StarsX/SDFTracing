@@ -36,6 +36,7 @@ protected:
 	enum ShaderIndex : uint8_t
 	{
 		CS_BUILD_SDF,
+		CS_UPDATE_SDF,
 		CS_SHADE_VOLUME,
 		CS_SHADE,
 
@@ -83,6 +84,7 @@ protected:
 		XUSG::RayTracing::GeometryBuffer* pGeometries);
 
 	void buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
+	void updateSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::DepthStencil* pDepthStencil);
 	void renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
@@ -106,6 +108,7 @@ protected:
 	XUSG::Texture::uptr			m_outputView;
 	XUSG::ConstantBuffer::uptr	m_cbPerFrame;
 	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
+	XUSG::StructuredBuffer::uptr m_meshBounds;
 	XUSG::StructuredBuffer::uptr m_lightSources[FrameCount];
 	XUSG::StructuredBuffer::uptr m_dynamicMeshList;
 	XUSG::StructuredBuffer::uptr m_dynamicMeshIds;

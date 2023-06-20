@@ -123,8 +123,22 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 	XUSG_N_RETURN(m_irradiance->Create(pDevice, gridSize, gridSize, gridSize, Format::R16G16B16A16_FLOAT,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, mipCount, MemoryFlag::NONE, L"IrradianceVolume"), false);
 
-	// Allocate dynamic mesh buffer
 	{
+		m_meshBounds = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(m_meshBounds->Create(pDevice, meshCount, sizeof(XMFLOAT4), ResourceFlag::NONE,
+			MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"MeshBounds"), false);
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		vector<XMFLOAT4> bounds(meshCount);
+		for (auto i = 0u; i < meshCount; ++i) bounds[i] = m_meshes[i].Bound;
+
+		XUSG_N_RETURN(m_meshBounds->Upload(pCommandList->AsCommandList(),
+			uploaders.back().get(), bounds.data(), sizeof(XMFLOAT4) * bounds.size()), false);
+	}
+
+	// For dynamic meshes
+	{
+		// Allocate dynamic mesh buffer
 		m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
 		XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()),
 			sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr,
@@ -212,6 +226,7 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 		buildSDF(pCommandList, frameIndex);
 		++m_frameIndex;
 	}
+	else updateSDF(pCommandList, frameIndex);
 	
 	visibility(pCommandList, frameIndex, pDepthStencil);
 	renderVolume(pCommandList, frameIndex);
@@ -311,6 +326,9 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSBuildSDF.cso"), false);
 	m_shaders[CS_BUILD_SDF] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
 
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSUpdateSDF.cso"), false);
+	m_shaders[CS_UPDATE_SDF] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
+
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::CS, csIndex, L"CSShadeVolume.cso"), false);
 	m_shaders[CS_SHADE_VOLUME] = m_shaderLib->GetShader(Shader::Stage::CS, csIndex++);
 
@@ -376,7 +394,7 @@ bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommand
 	return true;
 }
 
-void Renderer::buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex)
+void Renderer::buildSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex)
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
@@ -399,6 +417,40 @@ void Renderer::buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t
 	// Set SRV
 	const auto srv = RayTracing::EZ::GetSRV(m_topLevelAS.get());
 	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, 1, &srv);
+
+	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
+}
+
+void Renderer::updateSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex)
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+
+	// Set pipeline state
+	pCommandList->SetComputeShader(m_shaders[CS_UPDATE_SDF]);
+
+	// Set UAVs
+	const XUSG::EZ::ResourceView uavs[] =
+	{
+		XUSG::EZ::GetUAV(m_globalSDF.get()),
+		XUSG::EZ::GetUAV(m_idVolume.get()),
+		XUSG::EZ::GetUAV(m_barycVolume.get()),
+	};
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::UAV, 0, static_cast<uint32_t>(size(uavs)), uavs);
+
+	// Set CBV
+	const auto cbv = XUSG::EZ::GetCBV(m_cbPerFrame.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::CBV, 0, 1, &cbv);
+
+	// Set SRVs
+	const XUSG::EZ::ResourceView srvs[] =
+	{
+		RayTracing::EZ::GetSRV(m_topLevelAS.get()),
+		XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
+		XUSG::EZ::GetSRV(m_dynamicMeshIds.get()),
+		XUSG::EZ::GetSRV(m_dynamicMeshList.get()),
+		XUSG::EZ::GetSRV(m_meshBounds.get())
+	};
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
 }

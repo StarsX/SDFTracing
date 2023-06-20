@@ -144,7 +144,7 @@ void SDFTracing::LoadAssets()
 	const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = { 4, 1, 0, 0, 0, 3 };
 	m_commandList = RayTracing::EZ::CommandList::MakeUnique();
 	const auto pCommandList = m_commandList.get();
-	XUSG_N_RETURN(pCommandList->Create(commandList.get(), 2, 48, nullptr,
+	XUSG_N_RETURN(pCommandList->Create(commandList.get(), 2, 96, nullptr,
 		nullptr, nullptr, nullptr, nullptr, maxSrvSpaces), ThrowIfFailed(E_FAIL));
 
 	const auto meshCount = static_cast<uint32_t>(m_meshDescs.size());
