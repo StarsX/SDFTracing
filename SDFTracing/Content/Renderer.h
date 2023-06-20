@@ -26,7 +26,7 @@ public:
 		uint32_t meshCount, XUSG::RayTracing::GeometryBuffer* pGeometries, const MeshDesc* pMeshDescs);
 	bool SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t height);
 
-	void UpdateFrame(uint8_t frameIndex, DirectX::CXMVECTOR eyePt, DirectX::CXMMATRIX viewProj);
+	void UpdateFrame(double time, uint8_t frameIndex, DirectX::CXMVECTOR eyePt, DirectX::CXMMATRIX viewProj);
 	void Render(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex,
 		XUSG::RenderTarget* pRenderTarget, XUSG::DepthStencil* pDepthStencil);
 
@@ -63,6 +63,7 @@ protected:
 		DirectX::XMFLOAT4 Bound;
 
 		std::string Name;
+		bool IsDynamic;
 	};
 
 	struct DynamicMesh
@@ -85,6 +86,7 @@ protected:
 
 	void buildSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void updateSDF(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
+	void updateAccelerationStructures(XUSG::RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, XUSG::DepthStencil* pDepthStencil);
 	void renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
 	void render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex);
@@ -99,7 +101,7 @@ protected:
 	std::vector<DynamicMesh> m_dynamicMeshes;
 
 	XUSG::RayTracing::TopLevelAS::uptr m_topLevelAS;
-	XUSG::Resource::uptr		m_instances;
+	XUSG::Resource::uptr		m_instances[FrameCount];
 	XUSG::Texture3D::uptr		m_globalSDF;
 	XUSG::Texture3D::uptr		m_idVolume;
 	XUSG::Texture3D::uptr		m_barycVolume;
@@ -119,4 +121,5 @@ protected:
 	DirectX::XMFLOAT3X4 m_volumeWorld;
 	DirectX::XMUINT2 m_viewport;
 	uint32_t m_frameIndex;
+	double m_time;
 };

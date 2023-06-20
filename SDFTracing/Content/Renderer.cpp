@@ -184,8 +184,10 @@ bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t
 	return true;
 }
 
-void Renderer::UpdateFrame(uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
+void Renderer::UpdateFrame(double time, uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
 {
+	m_time = m_frameIndex < VOX_SAMPLE_COUNT ? 0.0 : time;
+
 	const auto volumeWorld = XMLoadFloat3x4(&m_volumeWorld);
 	const auto pCbPerFrame = static_cast<CBPerFrame*>(m_cbPerFrame->Map(frameIndex));
 	XMStoreFloat4x4(&pCbPerFrame->ViewProj, XMMatrixTranspose(viewProj));
@@ -264,6 +266,7 @@ bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, ve
 	else dynamicMeshIds[meshId] = UINT32_MAX;
 
 	m_meshes[meshId].Name = pMeshDescs[meshId].FileName.substr(0, pMeshDescs[meshId].FileName.find(".gltf"));
+	m_meshes[meshId].IsDynamic = pMeshDescs[meshId].IsDynamic;
 
 	return true;
 }
@@ -369,7 +372,7 @@ bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommand
 
 	// Prebuild TLAS
 	m_topLevelAS = TopLevelAS::MakeUnique();
-	XUSG_N_RETURN(pCommandList->PreBuildTLAS(m_topLevelAS.get(), meshCount), false);
+	XUSG_N_RETURN(pCommandList->PreBuildTLAS(m_topLevelAS.get(), meshCount, BuildFlag::ALLOW_UPDATE | BuildFlag::PREFER_FAST_TRACE), false);
 
 	// Set instance
 	vector<XMFLOAT3X4> matrices(meshCount);
@@ -381,15 +384,15 @@ bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommand
 		pTransforms[i] = reinterpret_cast<float*>(&matrices[i]);
 		pBottomLevelASs[i] = m_meshes[i].BottomLevelAS.get();
 	}
-	m_instances = Resource::MakeUnique();
-	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances.get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
+	for (auto& instances : m_instances) instances = Resource::MakeUnique();
+	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances->get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
 
 	// Build bottom level ASs
 	for (auto i = 0u; i < meshCount; ++i)
 		pCommandList->BuildBLAS(m_meshes[i].BottomLevelAS.get());
 
 	// Build top level AS
-	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances.get());
+	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances->get());
 
 	return true;
 }
@@ -453,6 +456,26 @@ void Renderer::updateSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t fram
 	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
+}
+
+void Renderer::updateAccelerationStructures(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex)
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+
+	// Set instance
+	static vector<XMFLOAT3X4> matrices(meshCount);
+	static vector<float*> pTransforms(meshCount);
+	static vector<const BottomLevelAS*> pBottomLevelASs(meshCount);
+	for (auto i = 0u; i < meshCount; ++i)
+	{
+		XMStoreFloat3x4(&matrices[i], getWorldMatrix(i));
+		pTransforms[i] = reinterpret_cast<float*>(&matrices[i]);
+		pBottomLevelASs[i] = m_meshes[i].BottomLevelAS.get();
+	}
+	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances[frameIndex].get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
+
+	// Update top level AS
+	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances[frameIndex].get(), true);
 }
 
 void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, DepthStencil* pDepthStencil)
@@ -660,7 +683,15 @@ void Renderer::calcMeshWorldAABB(XMVECTOR pAABB[2], uint32_t meshId) const
 FXMMATRIX Renderer::getWorldMatrix(uint32_t meshId) const
 {
 	const auto& posScale = m_meshes[meshId].PosScale;
+	const auto scl = XMMatrixScaling(posScale.w, posScale.w, posScale.w);
+	const auto tsl = XMMatrixTranslation(posScale.x, posScale.y, posScale.z);
 
-	return XMMatrixScaling(posScale.w, posScale.w, posScale.w) *
-		XMMatrixTranslation(posScale.x, posScale.y, posScale.z);
+	if (m_meshes[meshId].IsDynamic)
+	{
+		const auto rot = XMMatrixRotationY(static_cast<float>(m_time * 0.1f));
+
+		return scl * rot * tsl;
+	}
+
+	return scl * tsl;
 }

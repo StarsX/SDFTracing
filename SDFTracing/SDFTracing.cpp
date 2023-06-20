@@ -239,7 +239,7 @@ void SDFTracing::OnUpdate()
 	const auto view = XMLoadFloat4x4(&m_view);
 	const auto proj = XMLoadFloat4x4(&m_proj);
 
-	m_renderer->UpdateFrame(m_frameIndex, eyePt, view * proj);
+	m_renderer->UpdateFrame(time, m_frameIndex, eyePt, view * proj);
 }
 
 // Render the scene.
