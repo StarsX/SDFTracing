@@ -7,6 +7,8 @@
 #include "MonteCarlo.hlsli"
 #include "ImpactRange.hlsli"
 
+#define SAMPLE_COUNT 128
+
 typedef RaytracingAccelerationStructure RaytracingAS;
 typedef BuiltInTriangleIntersectionAttributes TriAttributes;
 
@@ -99,8 +101,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 	if (!needUpdate) return;
 
-	g_rwSDF[DTid] *= 2.0;
-
 	// Instantiate ray query object.
 	// Template parameter allows driver to generate a specialized
 	// implementation.
@@ -110,31 +110,48 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	ray.TMax = 100.0;
 	ray.Origin = pos;
 
-	const float2 xi = getSampleParam(DTid, gridSize, g_sampleIndex, VOX_SAMPLE_COUNT);
-	ray.Direction = computeDirectionUS(xi);
+	float2 xi = getSampleParam(DTid, gridSize, g_sampleIndex, SAMPLE_COUNT);
+	//const uint sampleCount = xi.x < 0.75 ? SAMPLE_COUNT : 1;
+	const uint sampleCount = SAMPLE_COUNT;
+	float closestSD = sampleCount > 1 ? 10000.0 : g_rwSDF[DTid];
+	uint id = 0;
+	float2 baryc = 0.0;
+	needUpdate = false;
 
-	q.TraceRayInline(g_scene, RAY_FLAG_NONE, ~0, ray);
-
-	// Execute inline ray tracing (ray query)
-	q.Proceed();
-
-	if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+	for (uint i = 0; i < sampleCount; ++i)
 	{
-		const float closestSD = g_rwSDF[DTid];
+		xi = getSampleParam(DTid, gridSize, g_sampleIndex * sampleCount + i, sampleCount);
+		ray.Direction = computeDirectionUS(xi);
 
-		const float dist = q.CommittedRayT();
-		const float signedDist = q.CommittedTriangleFrontFace() ? dist : -dist;
+		q.TraceRayInline(g_scene, RAY_FLAG_NONE, ~0, ray);
 
-		if (dist < abs(closestSD))
+		// Execute inline ray tracing (ray query)
+		q.Proceed();
+
+		if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
 		{
-			g_rwSDF[DTid] = signedDist;
+			const float dist = q.CommittedRayT();
+			const float signedDist = q.CommittedTriangleFrontFace() ? dist : -dist;
 
-			const float voxel = 2.0 * length(g_world[1]) / gridSize.y;
-			if (dist < voxel * 0.5 * sqrt(2.0))
+			if (dist < abs(closestSD))
 			{
-				g_rwIds[DTid] = ((q.CommittedInstanceIndex() << PRIMITIVE_BITS) | q.CommittedPrimitiveIndex()) + 1;
-				g_rwBaryc[DTid] = q.CommittedTriangleBarycentrics();
+				needUpdate = true;
+				closestSD = signedDist;
+				id = ((q.CommittedInstanceIndex() << PRIMITIVE_BITS) | q.CommittedPrimitiveIndex()) + 1;
+				baryc = q.CommittedTriangleBarycentrics();
 			}
+		}
+	}
+
+	if (needUpdate)
+	{
+		g_rwSDF[DTid] = closestSD;
+
+		const float voxel = 2.0 * length(g_world[1]) / gridSize.y;
+		if (abs(closestSD) < voxel * 0.5 * sqrt(2.0))
+		{
+			g_rwIds[DTid] = id;
+			g_rwBaryc[DTid] = baryc;
 		}
 	}
 }

@@ -186,7 +186,8 @@ bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t
 
 void Renderer::UpdateFrame(double time, uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
 {
-	m_time = m_frameIndex < VOX_SAMPLE_COUNT ? 0.0 : time;
+	m_timeStart = m_frameIndex < VOX_SAMPLE_COUNT ? time : m_timeStart;
+	m_time = time;
 
 	const auto volumeWorld = XMLoadFloat3x4(&m_volumeWorld);
 	const auto pCbPerFrame = static_cast<CBPerFrame*>(m_cbPerFrame->Map(frameIndex));
@@ -228,7 +229,11 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 		buildSDF(pCommandList, frameIndex);
 		++m_frameIndex;
 	}
-	else updateSDF(pCommandList, frameIndex);
+	else
+	{
+		updateAccelerationStructures(pCommandList, frameIndex);
+		updateSDF(pCommandList, frameIndex);
+	}
 	
 	visibility(pCommandList, frameIndex, pDepthStencil);
 	renderVolume(pCommandList, frameIndex);
@@ -688,7 +693,7 @@ FXMMATRIX Renderer::getWorldMatrix(uint32_t meshId) const
 
 	if (m_meshes[meshId].IsDynamic)
 	{
-		const auto rot = XMMatrixRotationY(static_cast<float>(m_time * 0.1f));
+		const auto rot = XMMatrixRotationY(static_cast<float>((m_time - m_timeStart) * 0.2));
 
 		return scl * rot * tsl;
 	}

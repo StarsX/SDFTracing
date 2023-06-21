@@ -121,5 +121,7 @@ protected:
 	DirectX::XMFLOAT3X4 m_volumeWorld;
 	DirectX::XMUINT2 m_viewport;
 	uint32_t m_frameIndex;
+
+	double m_timeStart;
 	double m_time;
 };
