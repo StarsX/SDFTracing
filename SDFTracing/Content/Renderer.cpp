@@ -693,7 +693,7 @@ FXMMATRIX Renderer::getWorldMatrix(uint32_t meshId) const
 
 	if (m_meshes[meshId].IsDynamic)
 	{
-		const auto rot = XMMatrixRotationY(static_cast<float>((m_time - m_timeStart) * 0.2));
+		const auto rot = XMMatrixRotationY(static_cast<float>((m_time - m_timeStart) * 0.5));
 
 		return scl * rot * tsl;
 	}

@@ -93,7 +93,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 			const float3 radii = (maxAABB - minAABB) * 0.5;
 			bound.Pos = (minAABB + maxAABB) * 0.5;
 			bound.Radius = max(radii.x, max(radii.y, radii.z));
-			bound.Radius += getImpactDistance();
+			bound.Radius += getImpactDistance() * 0.25;
 
 			needUpdate = distance(bound.Pos, pos) <= bound.Radius;
 		}
