@@ -7,7 +7,9 @@
 #include "MonteCarlo.hlsli"
 #include "ImpactRange.hlsli"
 
-#define SAMPLE_COUNT 128
+#define TEMPORAL_FRAME_COUNT 32
+#define PERFRAME_SAMPLE_COUNT 32
+#define FLT_MAX 3.402823466e+38 // max value
 
 typedef RaytracingAccelerationStructure RaytracingAS;
 typedef BuiltInTriangleIntersectionAttributes TriAttributes;
@@ -62,8 +64,14 @@ StructuredBuffer<Bound> g_bounds : register (t4);
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	// Impact by the dynamic meshes of the last frame
-	const uint lastHitMesh = g_rwIds[DTid];
-	bool needUpdate = g_dynamicMeshIds[lastHitMesh] != 0xffffffff;
+	uint lastHitMesh = g_rwIds[DTid];
+	bool needUpdate = lastHitMesh;
+
+	if (needUpdate)
+	{
+		lastHitMesh = DecodeVisibility(lastHitMesh).MeshId;
+		needUpdate = g_dynamicMeshIds[lastHitMesh] != 0xffffffff;
+	}
 
 	uint3 gridSize;
 	g_rwSDF.GetDimensions(gridSize.x, gridSize.y, gridSize.z);
@@ -93,9 +101,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
 			const float3 radii = (maxAABB - minAABB) * 0.5;
 			bound.Pos = (minAABB + maxAABB) * 0.5;
 			bound.Radius = max(radii.x, max(radii.y, radii.z));
-			bound.Radius += getImpactDistance() * 0.25;
+			bound.Radius += getImpactDistance() * 0.5;
 
-			needUpdate = distance(bound.Pos, pos) <= bound.Radius;
+			needUpdate = distance(bound.Pos, pos) < bound.Radius;
 		}
 	}
 
@@ -110,17 +118,18 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	ray.TMax = 100.0;
 	ray.Origin = pos;
 
-	float2 xi = getSampleParam(DTid, gridSize, g_sampleIndex, SAMPLE_COUNT);
-	//const uint sampleCount = xi.x < 0.75 ? SAMPLE_COUNT : 1;
-	const uint sampleCount = SAMPLE_COUNT;
-	float closestSD = sampleCount > 1 ? 10000.0 : g_rwSDF[DTid];
+	float2 xi;
+	//xi = getSampleParam(DTid, gridSize, g_sampleIndex, TEMPORAL_FRAME_COUNT);
+	//const uint n = xi.x < 0.75 ? PERFRAME_SAMPLE_COUNT : 1;
+	const uint n = PERFRAME_SAMPLE_COUNT;
+	float closestSD = (g_sampleIndex % TEMPORAL_FRAME_COUNT) ? g_rwSDF[DTid] : FLT_MAX;
 	uint id = 0;
 	float2 baryc = 0.0;
 	needUpdate = false;
 
-	for (uint i = 0; i < sampleCount; ++i)
+	for (uint i = 0; i < n; ++i)
 	{
-		xi = getSampleParam(DTid, gridSize, g_sampleIndex * sampleCount + i, sampleCount);
+		xi = getSampleParam(DTid, gridSize, n * g_sampleIndex + i, n * TEMPORAL_FRAME_COUNT);
 		ray.Direction = computeDirectionUS(xi);
 
 		q.TraceRayInline(g_scene, RAY_FLAG_NONE, ~0, ray);

@@ -2,6 +2,6 @@
 // Copyright (c) XU, Tianchen. All rights reserved.
 //--------------------------------------------------------------------------------------
 
-#define VOX_SAMPLE_COUNT 1024//32768
+#define VOX_SAMPLE_COUNT 2048//32768
 
 #define PI 3.1415926535897
