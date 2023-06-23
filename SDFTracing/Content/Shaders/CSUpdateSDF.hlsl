@@ -66,11 +66,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	// Impact by the dynamic meshes of the last frame
 	uint lastHitMesh = g_rwIds[DTid];
 	bool needUpdate = lastHitMesh;
+	bool isLastHitStatic = false;
 
 	if (needUpdate)
 	{
 		lastHitMesh = DecodeVisibility(lastHitMesh).MeshId;
 		needUpdate = g_dynamicMeshIds[lastHitMesh] != 0xffffffff;
+		isLastHitStatic = !needUpdate;
 	}
 
 	uint3 gridSize;
@@ -103,7 +105,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
 			bound.Radius = max(radii.x, max(radii.y, radii.z));
 			bound.Radius += getImpactDistance() * 0.5;
 
-			needUpdate = distance(bound.Pos, pos) < bound.Radius;
+			if (distance(bound.Pos, pos) < bound.Radius)
+			{
+				needUpdate = true;
+				break;
+			}
 		}
 	}
 
@@ -122,7 +128,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	//xi = getSampleParam(DTid, gridSize, g_sampleIndex, TEMPORAL_FRAME_COUNT);
 	//const uint n = xi.x < 0.75 ? PERFRAME_SAMPLE_COUNT : 1;
 	const uint n = PERFRAME_SAMPLE_COUNT;
-	float closestSD = (g_sampleIndex % TEMPORAL_FRAME_COUNT) ? g_rwSDF[DTid] : FLT_MAX;
+	float closestSD = (g_sampleIndex % TEMPORAL_FRAME_COUNT) || isLastHitStatic ? g_rwSDF[DTid] : FLT_MAX;
 	uint id = 0;
 	float2 baryc = 0.0;
 	needUpdate = false;

@@ -46,7 +46,8 @@ SDFTracing::SDFTracing(uint32_t width, uint32_t height, std::wstring name) :
 
 	m_meshDescs =
 	{
-		{ "Assets/bunny_uv.gltf", XMFLOAT4(-1.6f, 0.0f, -0.5f, 0.3f), true },
+		{ "Assets/bunny_uv.gltf", XMFLOAT4(-1.6f, 0.0f, -0.5f, 0.2f), true },
+		{ "Assets/bunny_uv.gltf", XMFLOAT4(2.5f, 3.0f, -0.5f, 0.2f), true },
 		{ "Assets/cornell_box1.gltf", XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f), false }
 	};
 }
