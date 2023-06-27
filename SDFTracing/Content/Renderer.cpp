@@ -360,8 +360,7 @@ bool Renderer::createShaders()
 
 bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommandList, GeometryBuffer* pGeometries)
 {
-	AccelerationStructure::SetFrameCount(FrameCount);
-
+	//AccelerationStructure::SetFrameCount(1); // In-place update
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 	for (auto i = 0u; i < meshCount; ++i)
 	{
