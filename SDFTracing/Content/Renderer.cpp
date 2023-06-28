@@ -479,7 +479,7 @@ void Renderer::updateAccelerationStructures(RayTracing::EZ::CommandList* pComman
 	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances[frameIndex].get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
 
 	// Update top level AS
-	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances[frameIndex].get(), true);
+	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances[frameIndex].get(), m_topLevelAS.get());
 }
 
 void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex, DepthStencil* pDepthStencil)

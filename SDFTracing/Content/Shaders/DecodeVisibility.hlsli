@@ -36,7 +36,7 @@ struct PerObject
 //--------------------------------------------------------------------------------------
 Texture2D<uint> g_txVisibility : register (t0, space0);
 StructuredBuffer<PerObject> g_matrices : register (t1, space0);
-StructuredBuffer<uint> g_indexBuffers[] : register (t0, space1);
+Buffer<uint> g_indexBuffers[] : register (t0, space1);
 StructuredBuffer<Vertex> g_vertexBuffers[] : register (t0, space2);
 
 Visibility DecodeVisibility(uint v)
