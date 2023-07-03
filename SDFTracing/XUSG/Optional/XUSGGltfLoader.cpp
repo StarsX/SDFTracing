@@ -18,7 +18,7 @@ GltfLoader::~GltfLoader()
 {
 }
 
-bool GltfLoader::Import(const char* pszFilename, bool needNorm, bool needColor, bool needBound, bool forDX)
+bool GltfLoader::Import(const char* pszFilename, bool needNorm, bool needColor, bool needAABB, bool forDX)
 {
 	m_lightSources.clear();
 
@@ -205,7 +205,7 @@ bool GltfLoader::Import(const char* pszFilename, bool needNorm, bool needColor, 
 				fillVertexScalars(vertexOffset, vertexCount, vertexScalar);
 			}
 			if (needNorm && !hasNormalData) recomputeNormals();
-			if (needBound) computeBound();
+			if (needAABB) computeAABB();
 		}
 
 		// Adjust index windings
@@ -249,14 +249,9 @@ const uint32_t* GltfLoader::GetIndices() const
 	return m_indices.data();
 }
 
-const GltfLoader::float3& GltfLoader::GetCenter() const
+const GltfLoader::AABB& GltfLoader::GetAABB() const
 {
-	return m_center;
-}
-
-const float GltfLoader::GetRadius() const
-{
-	return m_radius;
+	return m_aabb;
 }
 
 const vector<GltfLoader::LightSource>& GltfLoader::GetLightSources() const
@@ -329,7 +324,7 @@ void GltfLoader::recomputeNormals()
 	}
 }
 
-void GltfLoader::computeBound()
+void GltfLoader::computeAABB()
 {
 	float xMax, xMin, yMax, yMin, zMax, zMin;
 	const auto& p = getPosition(0);
@@ -356,16 +351,9 @@ void GltfLoader::computeBound()
 		if (z < zMin) zMin = z;
 		else if (z > zMax) zMax = z;
 	}
-
-	m_center.x = (xMin + xMax) / 2.0f;
-	m_center.y = (yMin + yMax) / 2.0f;
-	m_center.z = (zMin + zMax) / 2.0f;
-
-	const auto fWidth = xMax - xMin;
-	const auto fHeight = yMax - yMin;
-	const auto fLength = zMax - zMin;
-
-	m_radius = max(max(fWidth, fHeight), fLength) * 0.5f;
+	
+	m_aabb.Min = float3(xMin, yMin, zMin);
+	m_aabb.Max = float3(xMax, yMax, zMax);
 }
 
 uint8_t* GltfLoader::getVertex(uint32_t i)

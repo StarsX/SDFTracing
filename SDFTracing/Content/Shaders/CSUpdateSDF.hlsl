@@ -22,10 +22,10 @@ struct DynamicMesh
 	uint MeshId;
 };
 
-struct Bound
+struct AABB
 {
-	float3 Pos;
-	float Radius;
+	float3 Min;
+	float3 Max;
 };
 
 //--------------------------------------------------------------------------------------
@@ -53,7 +53,7 @@ RaytracingAS g_scene : register (t0);
 // Mesh info buffers
 StructuredBuffer<uint> g_dynamicMeshIds : register (t2);
 StructuredBuffer<DynamicMesh> g_dynamicMeshes : register (t3);
-StructuredBuffer<Bound> g_bounds : register (t4);
+StructuredBuffer<AABB> g_aabbs : register (t4);
 
 //SamplerState g_sampler;
 
@@ -88,24 +88,20 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		for (uint i = 0; i < dynamicMeshCount; ++i)
 		{
 			const DynamicMesh dynamicMesh = g_dynamicMeshes[i];
-			Bound bound = g_bounds[dynamicMesh.MeshId];
+			AABB aabb = g_aabbs[dynamicMesh.MeshId];
 			const PerObject matrices = g_matrices[dynamicMesh.MeshId];
 
-			// Generate AABB
-			float3 minAABB = bound.Pos - bound.Radius;
-			float3 maxAABB = bound.Pos + bound.Radius;
-
 			// To world space
-			minAABB = mul(float4(minAABB, 1.0), matrices.World);
-			maxAABB = mul(float4(maxAABB, 1.0), matrices.World);
+			aabb.Min = mul(float4(aabb.Min, 1.0), matrices.World);
+			aabb.Max = mul(float4(aabb.Max, 1.0), matrices.World);
 
 			// Sphere in world space
-			const float3 radii = (maxAABB - minAABB) * 0.5;
-			bound.Pos = (minAABB + maxAABB) * 0.5;
-			bound.Radius = max(radii.x, max(radii.y, radii.z));
-			bound.Radius += getImpactDistance() * 0.5;
+			const float3 radii = (aabb.Max - aabb.Min) * 0.5;
+			const float3 cPos = (aabb.Min + aabb.Max) * 0.5;
+			float radius = max(radii.x, max(radii.y, radii.z));
+			radius += getImpactDistance() * 0.5;
 
-			if (distance(bound.Pos, pos) < bound.Radius)
+			if (distance(cPos, pos) < radius)
 			{
 				needUpdate = true;
 				break;

@@ -60,7 +60,8 @@ protected:
 		uint32_t MeshId;
 
 		DirectX::XMFLOAT4 PosScale;
-		DirectX::XMFLOAT4 Bound;
+		DirectX::XMFLOAT3 MinAABB;
+		DirectX::XMFLOAT3 MaxAABB;
 
 		std::string Name;
 		bool IsDynamic;
@@ -110,7 +111,7 @@ protected:
 	XUSG::Texture::uptr			m_outputView;
 	XUSG::ConstantBuffer::uptr	m_cbPerFrame;
 	XUSG::StructuredBuffer::uptr m_matrices[FrameCount];
-	XUSG::StructuredBuffer::uptr m_meshBounds;
+	XUSG::StructuredBuffer::uptr m_meshAABBs;
 	XUSG::StructuredBuffer::uptr m_lightSources[FrameCount];
 	XUSG::StructuredBuffer::uptr m_dynamicMeshList;
 	XUSG::StructuredBuffer::uptr m_dynamicMeshIds;

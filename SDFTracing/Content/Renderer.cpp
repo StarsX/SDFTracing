@@ -26,6 +26,12 @@ struct PerObject
 	DirectX::XMFLOAT3X4 WorldIT;
 };
 
+struct AABB
+{
+	DirectX::XMFLOAT3 Min;
+	DirectX::XMFLOAT3 Max;
+};
+
 struct LightSource
 {
 	DirectX::XMFLOAT4 Min;
@@ -124,16 +130,20 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, mipCount, MemoryFlag::NONE, L"IrradianceVolume"), false);
 
 	{
-		m_meshBounds = StructuredBuffer::MakeUnique();
-		XUSG_N_RETURN(m_meshBounds->Create(pDevice, meshCount, sizeof(XMFLOAT4), ResourceFlag::NONE,
-			MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"MeshBounds"), false);
+		m_meshAABBs = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(m_meshAABBs->Create(pDevice, meshCount, sizeof(AABB), ResourceFlag::NONE,
+			MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"MeshAABBs"), false);
 		uploaders.emplace_back(Resource::MakeUnique());
 
-		vector<XMFLOAT4> bounds(meshCount);
-		for (auto i = 0u; i < meshCount; ++i) bounds[i] = m_meshes[i].Bound;
+		vector<AABB> aabbs(meshCount);
+		for (auto i = 0u; i < meshCount; ++i)
+		{
+			aabbs[i].Min = m_meshes[i].MinAABB;
+			aabbs[i].Max = m_meshes[i].MaxAABB;
+		}
 
-		XUSG_N_RETURN(m_meshBounds->Upload(pCommandList->AsCommandList(),
-			uploaders.back().get(), bounds.data(), sizeof(XMFLOAT4) * bounds.size()), false);
+		XUSG_N_RETURN(m_meshAABBs->Upload(pCommandList->AsCommandList(),
+			uploaders.back().get(), aabbs.data(), sizeof(AABB) * meshCount), false);
 	}
 
 	// For dynamic meshes
@@ -259,8 +269,9 @@ bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, ve
 
 	m_meshes[meshId].PosScale = pMeshDescs[meshId].PosScale;
 
-	const auto center = loader.GetCenter();
-	m_meshes[meshId].Bound = XMFLOAT4(center.x, center.y, center.z, loader.GetRadius());
+	const auto aabb = loader.GetAABB();
+	m_meshes[meshId].MinAABB = XMFLOAT3(aabb.Min.x, aabb.Min.y, aabb.Min.z);
+	m_meshes[meshId].MaxAABB = XMFLOAT3(aabb.Max.x, aabb.Max.y, aabb.Max.z);
 
 	if (pMeshDescs[meshId].IsDynamic)
 	{
@@ -455,7 +466,7 @@ void Renderer::updateSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t fram
 		XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
 		XUSG::EZ::GetSRV(m_dynamicMeshIds.get()),
 		XUSG::EZ::GetSRV(m_dynamicMeshList.get()),
-		XUSG::EZ::GetSRV(m_meshBounds.get())
+		XUSG::EZ::GetSRV(m_meshAABBs.get())
 	};
 	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
 
@@ -671,13 +682,8 @@ void Renderer::antiAlias(XUSG::EZ::CommandList* pCommandList, RenderTarget* pRen
 
 void Renderer::calcMeshWorldAABB(XMVECTOR pAABB[2], uint32_t meshId) const
 {
-	auto pos = XMLoadFloat4(&m_meshes[meshId].Bound);
-	pos = XMVectorSetW(pos, 1.0f);
-
-	const auto radius = XMVectorReplicate(m_meshes[meshId].Bound.w);
-
-	pAABB[0] = pos - radius;
-	pAABB[1] = pos + radius;
+	pAABB[0] = XMLoadFloat3(&m_meshes[meshId].MinAABB);
+	pAABB[1] = XMLoadFloat3(&m_meshes[meshId].MaxAABB);
 
 	const auto world = getWorldMatrix(meshId);
 	pAABB[0] = XMVector3TransformCoord(pAABB[0], world);

@@ -59,6 +59,12 @@ namespace XUSG
 			float4 Emissive;
 		};
 
+		struct AABB
+		{
+			float3 Min;
+			float3 Max;
+		}; 
+
 		GltfLoader();
 		virtual ~GltfLoader();
 
@@ -71,8 +77,7 @@ namespace XUSG
 		const uint8_t* GetVertices() const;
 		const uint32_t* GetIndices() const;
 
-		const float3& GetCenter() const;
-		const float GetRadius() const;
+		const AABB& GetAABB() const;
 
 		const std::vector<LightSource>& GetLightSources() const;
 
@@ -80,7 +85,7 @@ namespace XUSG
 		void fillVertexColors(uint32_t offset, uint32_t size, float4 color);
 		void fillVertexScalars(uint32_t offset, uint32_t size, float scalar);
 		void recomputeNormals();
-		void computeBound();
+		void computeAABB();
 
 		uint8_t* getVertex(uint32_t i);
 		float3& getPosition(uint32_t i);
@@ -96,7 +101,7 @@ namespace XUSG
 		std::vector<uint8_t>	m_vertices;
 		std::vector<uint32_t>	m_indices;
 		std::vector<LightSource> m_lightSources;
-
+		
 		uint32_t	m_stride;
 		uint32_t	m_posOffset;
 		uint32_t	m_nrmOffset;
@@ -104,7 +109,6 @@ namespace XUSG
 		uint32_t	m_colorOffset;
 		uint32_t	m_scalarOffset;
 
-		float3		m_center;
-		float		m_radius;
+		AABB m_aabb;
 	};
 }
