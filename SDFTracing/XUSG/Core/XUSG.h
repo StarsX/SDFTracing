@@ -363,8 +363,9 @@ namespace XUSG
 		ALLOW_CROSS_ADAPTER = (1 << 4),
 		ALLOW_SIMULTANEOUS_ACCESS = (1 << 5),
 		VIDEO_DECODE_REFERENCE_ONLY = (1 << 6),
-		NEED_PACKED_UAV = ALLOW_UNORDERED_ACCESS | 0x8000,
-		ACCELERATION_STRUCTURE = ALLOW_UNORDERED_ACCESS | 0x400000
+		VIDEO_ENCODE_REFERENCE_ONLY = (1 << 7),
+		ACCELERATION_STRUCTURE = ALLOW_UNORDERED_ACCESS | (1 << 8),
+		NEED_PACKED_UAV = ALLOW_UNORDERED_ACCESS | (1 << 9)
 	};
 
 	XUSG_DEF_ENUM_FLAG_OPERATORS(ResourceFlag);
@@ -386,20 +387,22 @@ namespace XUSG
 		COPY_SOURCE = (1 << 11),
 		RESOLVE_DEST = (1 << 12),
 		RESOLVE_SOURCE = (1 << 13),
-		PREDICATION = (1 << 14),
-		RAYTRACING_ACCELERATION_STRUCTURE = (1 << 15),
-		SHADING_RATE_SOURCE = (1 << 16),
+		RAYTRACING_ACCELERATION_STRUCTURE = (1 << 14),
+		SHADING_RATE_SOURCE = (1 << 15),
 
-		SHADER_RESOURCE = NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE,
-		GENERAL_READ = VERTEX_AND_CONSTANT_BUFFER | INDEX_BUFFER | SHADER_RESOURCE | INDIRECT_ARGUMENT | COPY_SOURCE | PREDICATION,
-		PRESENT = 0,
+		ALL_SHADER_RESOURCE = NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE,
+		GENERAL_READ = VERTEX_AND_CONSTANT_BUFFER | INDEX_BUFFER | ALL_SHADER_RESOURCE | INDIRECT_ARGUMENT | COPY_SOURCE,
+		PRESENT = COMMON,
+		PREDICATION = INDIRECT_ARGUMENT,
 
-		VIDEO_DECODE_READ = (1 << 17),
-		VIDEO_DECODE_WRITE = (1 << 18),
-		VIDEO_PROCESS_READ = (1 << 19),
-		VIDEO_PROCESS_WRITE = (1 << 20),
-		VIDEO_ENCODE_READ = (1 << 21),
-		VIDEO_ENCODE_WRITE = (1 << 22)
+		VIDEO_DECODE_READ = (1 << 16),
+		VIDEO_DECODE_WRITE = (1 << 17),
+		VIDEO_PROCESS_READ = (1 << 18),
+		VIDEO_PROCESS_WRITE = (1 << 19),
+		VIDEO_ENCODE_READ = (1 << 20),
+		VIDEO_ENCODE_WRITE = (1 << 21),
+
+		AUTO = (1u << 31)
 	};
 
 	XUSG_DEF_ENUM_FLAG_OPERATORS(ResourceState);
@@ -408,8 +411,7 @@ namespace XUSG
 	{
 		NONE = 0,
 		BEGIN_ONLY = (1 << 0),
-		END_ONLY = (1 << 1),
-		RESET_SRC_STATE = (1 << 2)
+		END_ONLY = (1 << 1)
 	};
 
 	XUSG_DEF_ENUM_FLAG_OPERATORS(BarrierFlag);
@@ -1211,18 +1213,20 @@ namespace XUSG
 		virtual void SetGraphicsPipelineLayout(const PipelineLayout& pipelineLayout) const = 0;
 		virtual void SetComputeDescriptorTable(uint32_t index, const DescriptorTable& descriptorTable) const = 0;
 		virtual void SetGraphicsDescriptorTable(uint32_t index, const DescriptorTable& descriptorTable) const = 0;
+		virtual void SetComputeDescriptorTable(uint32_t index, const DescriptorHeap& descriptorHeap, int32_t offset) const = 0;
+		virtual void SetGraphicsDescriptorTable(uint32_t index, const DescriptorHeap& descriptorHeap, int32_t offset) const = 0;
 		virtual void SetCompute32BitConstant(uint32_t index, uint32_t srcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
 		virtual void SetGraphics32BitConstant(uint32_t index, uint32_t srcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
 		virtual void SetCompute32BitConstants(uint32_t index, uint32_t num32BitValuesToSet,
 			const void* pSrcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
 		virtual void SetGraphics32BitConstants(uint32_t index, uint32_t num32BitValuesToSet,
 			const void* pSrcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
-		virtual void SetComputeRootConstantBufferView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
-		virtual void SetGraphicsRootConstantBufferView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
-		virtual void SetComputeRootShaderResourceView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
-		virtual void SetGraphicsRootShaderResourceView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
-		virtual void SetComputeRootUnorderedAccessView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
-		virtual void SetGraphicsRootUnorderedAccessView(uint32_t index, const Resource* pResource, int offset = 0) const = 0;
+		virtual void SetComputeRootConstantBufferView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
+		virtual void SetGraphicsRootConstantBufferView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
+		virtual void SetComputeRootShaderResourceView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
+		virtual void SetGraphicsRootShaderResourceView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
+		virtual void SetComputeRootUnorderedAccessView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
+		virtual void SetGraphicsRootUnorderedAccessView(uint32_t index, const Resource* pResource, int32_t offset = 0) const = 0;
 		virtual void SetComputeRootConstantBufferView(uint32_t index, uint64_t address) const = 0;
 		virtual void SetGraphicsRootConstantBufferView(uint32_t index, uint64_t address) const = 0;
 		virtual void SetComputeRootShaderResourceView(uint32_t index, uint64_t address) const = 0;
@@ -1363,10 +1367,11 @@ namespace XUSG
 
 		virtual uint32_t SetBarrier(ResourceBarrier* pBarriers, ResourceState dstState,
 			uint32_t numBarriers = 0, uint32_t subresource = XUSG_BARRIER_ALL_SUBRESOURCES,
-			BarrierFlag flags = BarrierFlag::NONE, uint32_t threadIdx = 0) = 0;
+			BarrierFlag flags = BarrierFlag::NONE, ResourceState srcState = ResourceState::AUTO,
+			uint32_t threadIdx = 0) = 0;
 
 		virtual ResourceState Transition(ResourceState dstState, uint32_t subresource = XUSG_BARRIER_ALL_SUBRESOURCES,
-			BarrierFlag flag = BarrierFlag::NONE, uint32_t threadIdx = 0) = 0;
+			BarrierFlag flag = BarrierFlag::NONE, ResourceState srcState = ResourceState::AUTO, uint32_t threadIdx = 0) = 0;
 		virtual ResourceState GetResourceState(uint32_t subresource = 0, uint32_t threadIdx = 0) const = 0;
 
 		virtual uint64_t GetWidth() const = 0;
@@ -1475,10 +1480,11 @@ namespace XUSG
 
 		virtual uint32_t SetBarrier(ResourceBarrier* pBarriers, ResourceState dstState,
 			uint32_t numBarriers = 0, uint32_t subresource = XUSG_BARRIER_ALL_SUBRESOURCES,
-			BarrierFlag flags = BarrierFlag::NONE, uint32_t threadIdx = 0) = 0;
+			BarrierFlag flags = BarrierFlag::NONE, ResourceState srcState = ResourceState::AUTO,
+			uint32_t threadIdx = 0) = 0;
 		virtual uint32_t SetBarrier(ResourceBarrier* pBarriers, uint8_t mipLevel, ResourceState dstState,
 			uint32_t numBarriers = 0, uint32_t slice = 0, BarrierFlag flags = BarrierFlag::NONE,
-			uint32_t threadIdx = 0) = 0;
+			ResourceState srcState = ResourceState::AUTO, uint32_t threadIdx = 0) = 0;
 
 		virtual void Blit(const CommandList* pCommandList, uint32_t groupSizeX, uint32_t groupSizeY,
 			uint32_t groupSizeZ, const DescriptorTable& uavSrvTable, uint32_t uavSrvSlot = 0,
@@ -2318,5 +2324,5 @@ namespace XUSG
 	XUSG_INTERFACE uint8_t CalculateMipLevels(uint32_t width, uint32_t height, uint32_t depth = 1);
 	XUSG_INTERFACE uint8_t CalculateMipLevels(uint64_t width, uint32_t height, uint32_t depth = 1);
 
-	XUSG_INTERFACE uint32_t CalculateSubresource(uint8_t mipSlice, uint8_t numMips, uint32_t arraySlice, uint32_t arraySize, uint8_t planeSlice);
+	XUSG_INTERFACE uint32_t CalcSubresource(uint8_t mipSlice, uint8_t numMips, uint32_t arraySlice, uint32_t arraySize, uint8_t planeSlice);
 }

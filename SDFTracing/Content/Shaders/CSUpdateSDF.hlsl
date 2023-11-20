@@ -137,7 +137,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		q.TraceRayInline(g_scene, RAY_FLAG_NONE, ~0, ray);
 
 		// Execute inline ray tracing (ray query)
-		q.Proceed();
+		while (q.Proceed());
 
 		if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
 		{

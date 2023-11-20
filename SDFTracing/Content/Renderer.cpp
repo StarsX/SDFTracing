@@ -380,14 +380,16 @@ bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommand
 		auto ibv = XUSG::EZ::GetIBV(m_meshes[i].IndexBuffer.get());
 		pCommandList->SetTriangleGeometries(pGeometries[i], 1, Format::R32G32B32_FLOAT, &vbv, &ibv);
 
-		// Prebuild BLAS
+		// Prebuild and allocate BLAS
 		m_meshes[i].BottomLevelAS = BottomLevelAS::MakeUnique();
-		XUSG_N_RETURN(pCommandList->PreBuildBLAS(m_meshes[i].BottomLevelAS.get(), 1, pGeometries[i]), false);
+		XUSG_N_RETURN(pCommandList->PrebuildBLAS(m_meshes[i].BottomLevelAS.get(), 1, pGeometries[i]), false);
+		XUSG_N_RETURN(pCommandList->AllocateAccelerationStructure(m_meshes[i].BottomLevelAS.get()), false);
 	}
 
-	// Prebuild TLAS
+	// Prebuild and allocate TLAS
 	m_topLevelAS = TopLevelAS::MakeUnique();
-	XUSG_N_RETURN(pCommandList->PreBuildTLAS(m_topLevelAS.get(), meshCount, BuildFlag::ALLOW_UPDATE | BuildFlag::PREFER_FAST_TRACE), false);
+	XUSG_N_RETURN(pCommandList->PrebuildTLAS(m_topLevelAS.get(), meshCount, BuildFlag::ALLOW_UPDATE | BuildFlag::PREFER_FAST_TRACE), false);
+	XUSG_N_RETURN(pCommandList->AllocateAccelerationStructure(m_topLevelAS.get()), false);
 
 	// Set instance
 	vector<XMFLOAT3X4> matrices(meshCount);
