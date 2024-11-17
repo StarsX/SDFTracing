@@ -43,13 +43,6 @@ SDFTracing::SDFTracing(uint32_t width, uint32_t height, std::wstring name) :
 	freopen_s(&stream, "CONOUT$", "w+t", stdout);
 	freopen_s(&stream, "CONOUT$", "w+t", stderr);
 #endif
-
-	m_meshDescs =
-	{
-		{ "Assets/bunny_uv.gltf", XMFLOAT4(-1.6f, 0.0f, -0.5f, 0.2f), true },
-		{ "Assets/bunny_uv.gltf", XMFLOAT4(2.5f, 3.0f, -0.5f, 0.2f), true },
-		{ "Assets/cornell_box1.gltf", XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f), false }
-	};
 }
 
 SDFTracing::~SDFTracing()
@@ -141,20 +134,29 @@ void SDFTracing::LoadAssets()
 	// Create ray tracing interfaces
 	XUSG_N_RETURN(commandList->CreateInterface(), ThrowIfFailed(E_FAIL));
 
-	// TODO: create m_commandListEZ.
-	const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = { 4, 1, 0, 0, 0, 3 };
+	// Create m_commandListEZ.
 	m_commandList = RayTracing::EZ::CommandList::MakeUnique();
 	const auto pCommandList = m_commandList.get();
-	XUSG_N_RETURN(pCommandList->Create(commandList.get(), 2, 128, nullptr,
-		nullptr, nullptr, nullptr, nullptr, maxSrvSpaces), ThrowIfFailed(E_FAIL));
+	XUSG_N_RETURN(pCommandList->Create(commandList.get(), 8, 8192), ThrowIfFailed(E_FAIL));
 
-	const auto meshCount = static_cast<uint32_t>(m_meshDescs.size());
+	tiny::TinyJson sceneReader;
+	ifstream ifs("Assets/CornellBox.json", ios::in);
+	if (ifs)
+	{
+		stringstream buffer;
+		buffer << ifs.rdbuf();
+		string sceneString(buffer.str());
+		ifs.close();
+
+		if (!sceneReader.ReadJson(sceneString)) ThrowIfFailed(E_FAIL);
+	}
+	else ThrowIfFailed(E_FAIL);
+
 	vector<Resource::uptr> uploaders(0);
-	vector<GeometryBuffer> geometries(meshCount);
+	vector<GeometryBuffer> geometries;
 
 	m_renderer = make_unique<Renderer>();
-	XUSG_N_RETURN(m_renderer->Init(pCommandList, uploaders, meshCount, geometries.data(),
-		m_meshDescs.data()), ThrowIfFailed(E_FAIL));
+	XUSG_N_RETURN(m_renderer->Init(pCommandList, uploaders, sceneReader, geometries), ThrowIfFailed(E_FAIL));
 
 	// Close the command list and execute it to begin the initial GPU setup.
 	XUSG_N_RETURN(pCommandList->Close(), ThrowIfFailed(E_FAIL));
@@ -221,7 +223,7 @@ void SDFTracing::CreateResources()
 	XUSG_N_RETURN(m_depth->Create(m_device.get(), m_width, m_height, Format::D24_UNORM_S8_UINT,
 		ResourceFlag::DENY_SHADER_RESOURCE), ThrowIfFailed(E_FAIL));
 
-	XUSG_N_RETURN(m_renderer->SetViewport(m_device.get(), m_width, m_height), ThrowIfFailed(E_FAIL));
+	XUSG_N_RETURN(m_renderer->SetViewport(m_commandList.get(), m_width, m_height), ThrowIfFailed(E_FAIL));
 }
 
 // Update frame-based values.

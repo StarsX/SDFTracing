@@ -36,9 +36,6 @@ namespace XUSG
 
 		XUSG_INTERFACE void CalcSubresources(std::vector<uint32_t>& subresources, const Texture* pResource, uint8_t mipSlice, uint8_t planeSlice = 0);
 
-		XUSG_INTERFACE uint32_t CalcSubresource(const Texture* pResource, uint8_t mipSlice, uint32_t arraySlice, uint8_t planeSlice = 0);
-		XUSG_INTERFACE uint32_t CalcSubresource(const Texture3D* pResource, uint8_t mipSlice, uint8_t planeSlice = 0);
-
 		// Resource view generation helpers coupled for XUSG resources
 		XUSG_INTERFACE ResourceView GetCBV(ConstantBuffer* pResource, uint32_t index = 0);
 		XUSG_INTERFACE ResourceView GetSRV(Buffer* pResource, uint32_t index = 0,
@@ -47,28 +44,17 @@ namespace XUSG
 			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE | ResourceState::VERTEX_AND_CONSTANT_BUFFER);
 		XUSG_INTERFACE ResourceView GetSRV(IndexBuffer* pResource, uint32_t index = 0,
 			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE | ResourceState::INDEX_BUFFER);
-		XUSG_INTERFACE ResourceView GetSRV(Texture* pResource, uint32_t index = 0,
-			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
-		XUSG_INTERFACE ResourceView GetSRV(Texture3D* pResource,
-			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
-		XUSG_INTERFACE ResourceView GetSRVLevel(Texture* pResource, uint8_t level,
-			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
-		XUSG_INTERFACE ResourceView GetSRVLevel(Texture3D* pResource, uint8_t level,
-			ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
-		XUSG_INTERFACE ResourceView GetUAV(StructuredBuffer* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetUAV(Buffer* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetUAV(Texture* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetUAV(Texture3D* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetPackedUAV(Texture* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetPackedUAV(Texture3D* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetPackedUAV(TypedBuffer* pResource, uint8_t index = 0);
-		XUSG_INTERFACE ResourceView GetRTV(RenderTarget* pResource, uint32_t slice = 0, uint8_t mipLevel = 0);
-		XUSG_INTERFACE ResourceView GetArrayRTV(RenderTarget* pResource, uint8_t mipLevel = 0);
-		XUSG_INTERFACE ResourceView GetDSV(DepthStencil* pResource, uint32_t slice = 0, uint8_t mipLevel = 0);
-		XUSG_INTERFACE ResourceView GetArrayDSV(DepthStencil* pResource, uint8_t mipLevel = 0);
-		XUSG_INTERFACE ResourceView GetReadOnlyDSV(DepthStencil* pResource, uint32_t slice = 0,
-			uint8_t mipLevel = 0, ResourceState dstSrvState = ResourceState::ALL_SHADER_RESOURCE);
-		XUSG_INTERFACE ResourceView GetReadOnlyArrayDSV(DepthStencil* pResource,
+		XUSG_INTERFACE ResourceView GetSRV(Texture* pResource, uint8_t firstLevel = 0,
+			bool singleLevel = false, ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
+		XUSG_INTERFACE ResourceView GetSRV(Texture3D* pResource, uint8_t firstLevel = 0,
+			bool singleLevel = false, ResourceState dstState = ResourceState::ALL_SHADER_RESOURCE);
+		XUSG_INTERFACE ResourceView GetUAV(Buffer* pResource, uint32_t index = 0);
+		XUSG_INTERFACE ResourceView GetUAV(Texture* pResource, uint8_t level = 0, Format format = Format::UNKNOWN);
+		XUSG_INTERFACE ResourceView GetUAV(Texture3D* pResource, uint8_t level = 0, Format format = Format::UNKNOWN);
+		XUSG_INTERFACE ResourceView GetUAV(TypedBuffer* pResource, uint32_t index = 0, Format format = Format::UNKNOWN);
+		XUSG_INTERFACE ResourceView GetRTV(RenderTarget* pResource, uint16_t slice = 0, uint8_t mipLevel = 0); // slice = UINT16_MAX for array RTV
+		XUSG_INTERFACE ResourceView GetDSV(DepthStencil* pResource, uint16_t slice = 0, uint8_t mipLevel = 0); // slice = UINT16_MAX for array DSV
+		XUSG_INTERFACE ResourceView GetReadOnlyDSV(DepthStencil* pResource, uint16_t slice = 0,
 			uint8_t mipLevel = 0, ResourceState dstSrvState = ResourceState::ALL_SHADER_RESOURCE);
 		XUSG_INTERFACE ResourceView GetStencilSRV(DepthStencil* pResource,
 			ResourceState dstSrvState = ResourceState::ALL_SHADER_RESOURCE);
@@ -97,7 +83,11 @@ namespace XUSG
 				const uint32_t* pMaxUavsEachSpace[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxCbvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
-				const uint32_t maxUavSpaces[Shader::Stage::NUM_STAGE] = nullptr) = 0;
+				const uint32_t maxUavSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t max32BitConstants[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSlots[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				uint32_t slotExt = 0, uint32_t spaceExt = 0x7FFF0ADE) = 0;
 			virtual bool Create(const Device* pDevice, void* pHandle,
 				uint32_t samplerHeapSize, uint32_t cbvSrvUavHeapSize,
 				const uint32_t maxSamplers[Shader::Stage::NUM_STAGE] = nullptr,
@@ -107,6 +97,10 @@ namespace XUSG
 				const uint32_t maxCbvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxUavSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t max32BitConstants[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSlots[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				uint32_t slotExt = 0, uint32_t spaceExt = 0x7FFF0ADE,
 				const wchar_t* name = nullptr) = 0;
 			virtual bool Close(RenderTarget* pBackBuffer = nullptr) = 0;
 			virtual bool Reset(const CommandAllocator* pAllocator, const Pipeline& initialState) = 0;
@@ -168,7 +162,8 @@ namespace XUSG
 			virtual void SetGraphicsNodeMask(uint32_t nodeMask) = 0;
 			virtual void SetComputeShader(const Blob& shader) = 0;
 			virtual void SetComputeNodeMask(uint32_t nodeMask) = 0;
-			virtual void SetPipelineState(const Pipeline& pipelineState) = 0;
+			virtual void SetGraphicsPipelineState(const Pipeline& pipelineState, const Graphics::State* pState = nullptr) = 0;
+			virtual void SetComputePipelineState(const Pipeline& pipelineState, const Compute::State* pState = nullptr) = 0;
 			virtual void ExecuteBundle(const XUSG::CommandList* pCommandList) const = 0;
 			virtual void SetSamplers(Shader::Stage stage, uint32_t startBinding,
 				uint32_t numSamplers, const Sampler* const* pSamplers) = 0;
@@ -176,6 +171,13 @@ namespace XUSG
 				uint32_t numSamplers, const SamplerPreset* pSamplerPresets) = 0;
 			virtual void SetResources(Shader::Stage stage, DescriptorType descriptorType, uint32_t startBinding,
 				uint32_t numResources, const ResourceView* pResourceViews, uint32_t space = 0) = 0;
+			virtual void SetGraphicsDescriptorTable(Shader::Stage stage, DescriptorType descriptorType, const DescriptorTable& descriptorTable, uint32_t space) = 0;
+			virtual void SetComputeDescriptorTable(DescriptorType descriptorType, const DescriptorTable& descriptorTable, uint32_t space) = 0;
+			virtual void SetGraphics32BitConstant(Shader::Stage stage, uint32_t srcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
+			virtual void SetCompute32BitConstant(uint32_t srcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
+			virtual void SetGraphics32BitConstants(Shader::Stage stage, uint32_t num32BitValuesToSet, const void* pSrcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
+			virtual void SetCompute32BitConstants(uint32_t num32BitValuesToSet, const void* pSrcData, uint32_t destOffsetIn32BitValues = 0) const = 0;
+
 			virtual void IASetPrimitiveTopology(PrimitiveTopology primitiveTopology) = 0;
 			virtual void IASetIndexBuffer(const IndexBufferView& view) = 0;
 			virtual void IASetVertexBuffers(uint32_t startSlot, uint32_t numViews, const VertexBufferView* pViews) = 0;
@@ -198,12 +200,11 @@ namespace XUSG
 			virtual void EndQuery(const QueryHeap& queryHeap, QueryType type, uint32_t index) const = 0;
 			virtual void ResolveQueryData(const QueryHeap& queryHeap, QueryType type, uint32_t startIndex,
 				uint32_t numQueries, const Resource* pDstBuffer, uint64_t alignedDstBufferOffset) const = 0;
-			virtual void SetPredication(const Resource* pBuffer, uint64_t alignedBufferOffset, bool opEqualZero)const = 0;
+			virtual void SetPredication(const Resource* pBuffer, uint64_t alignedBufferOffset, bool opEqualZero) const = 0;
 			virtual void SetMarker(uint32_t metaData, const void* pData, uint32_t size) const = 0;
 			virtual void BeginEvent(uint32_t metaData, const void* pData, uint32_t size) const = 0;
 			virtual void EndEvent() = 0;
 
-			virtual void ResetDescriptorHeap(DescriptorHeapType type) = 0;
 			virtual void Resize() = 0;
 
 			virtual void Blit(Texture* pDstResource, Texture* pSrcResource, SamplerPreset sampler,
@@ -217,6 +218,14 @@ namespace XUSG
 			virtual const Graphics::Blend* GetBlend(Graphics::BlendPreset preset, uint8_t numColorRTs = 1) = 0;
 			virtual const Graphics::Rasterizer* GetRasterizer(Graphics::RasterizerPreset preset) = 0;
 			virtual const Graphics::DepthStencil* GetDepthStencil(Graphics::DepthStencilPreset preset) = 0;
+
+			virtual DescriptorTableLib* GetDescriptorTableLib() const = 0;
+
+			virtual const XUSG::PipelineLayout& GetGraphicsPipelineLayout() const = 0;
+			virtual const XUSG::PipelineLayout& GetComputePipelineLayout() const = 0;
+
+			virtual uint32_t GetGraphicsConstantParamIndex(Shader::Stage stage) const = 0;
+			virtual uint32_t GetComputeConstantParamIndex() const = 0;
 
 			virtual void* GetHandle() const = 0;
 			virtual void* GetDeviceHandle() const = 0;
@@ -238,6 +247,10 @@ namespace XUSG
 				const uint32_t maxCbvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxUavSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t max32BitConstants[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSlots[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				uint32_t slotExt = 0, uint32_t spaceExt = 0x7FFF0ADE,
 				API api = API::DIRECTX_12);
 			static sptr MakeShared(XUSG::CommandList* pCommandList,
 				uint32_t samplerHeapSize, uint32_t cbvSrvUavHeapSize,
@@ -248,6 +261,10 @@ namespace XUSG
 				const uint32_t maxCbvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = nullptr,
 				const uint32_t maxUavSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t max32BitConstants[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSlots[Shader::Stage::NUM_STAGE] = nullptr,
+				const uint32_t constantSpaces[Shader::Stage::NUM_STAGE] = nullptr,
+				uint32_t slotExt = 0, uint32_t spaceExt = 0x7FFF0ADE,
 				API api = API::DIRECTX_12);
 		};
 	}

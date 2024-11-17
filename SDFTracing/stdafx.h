@@ -34,6 +34,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <iomanip>
 
 #if _HAS_CXX17
@@ -47,6 +48,8 @@
 #include <functional>
 #include <wrl.h>
 #include <shellapi.h>
+
+#include "tinyjson.hpp"
 
 #if defined(DEBUG) | defined(_DEBUG)
 #ifndef DBG_NEW

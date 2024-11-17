@@ -44,7 +44,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	const float2 barycentrics = g_txBaryc[DTid];
 
 	// Decode visibility
-	const Visibility vis = DecodeVisibility(encodedId);
+	const Visibility vis = decodeVisibility(encodedId);
 
 	// Fetch vertices
 	Vertex vertices[3];

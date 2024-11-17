@@ -20,9 +20,11 @@ struct Attrib
 	uint MeshId;
 	float3	Pos;
 	float3	Nrm;
-	float2	UV;
-	min16float3	Color;
-	float	Emissive;
+	float2	UV0;
+	float2	UV1;
+	float4	Tan;
+	min16float3 Color;
+	min16float Emissive;
 };
 
 struct PerObject
@@ -39,7 +41,10 @@ StructuredBuffer<PerObject> g_matrices : register (t1, space0);
 Buffer<uint> g_indexBuffers[] : register (t0, space1);
 StructuredBuffer<Vertex> g_vertexBuffers[] : register (t0, space2);
 
-Visibility DecodeVisibility(uint v)
+//--------------------------------------------------------------------------------------
+// Decode visibility-buffer values
+//--------------------------------------------------------------------------------------
+Visibility decodeVisibility(uint v)
 {
 	Visibility vis;
 
@@ -116,20 +121,30 @@ Attrib interpAttrib(uint meshIdx, Vertex vertices[3], float2 barycentrics)
 		baryWeights[1] * vertices[1].Nrm +
 		baryWeights[2] * vertices[2].Nrm;
 
-	attrib.UV =
-		baryWeights[0] * vertices[0].UV +
-		baryWeights[1] * vertices[1].UV +
-		baryWeights[2] * vertices[2].UV;
+	attrib.UV0 =
+		baryWeights[0] * vertices[0].UV0 +
+		baryWeights[1] * vertices[1].UV0 +
+		baryWeights[2] * vertices[2].UV0;
+
+	attrib.UV1 =
+		baryWeights[0] * vertices[0].UV1 +
+		baryWeights[1] * vertices[1].UV1 +
+		baryWeights[2] * vertices[2].UV1;
+
+	attrib.Tan =
+		baryWeights[0] * vertices[0].Tan +
+		baryWeights[1] * vertices[1].Tan +
+		baryWeights[2] * vertices[2].Tan;
 
 	attrib.Color = min16float3(
 		baryWeights[0] * D3DX_R8G8B8A8_UNORM_to_FLOAT4(vertices[0].Color).xyz +
 		baryWeights[1] * D3DX_R8G8B8A8_UNORM_to_FLOAT4(vertices[1].Color).xyz +
 		baryWeights[2] * D3DX_R8G8B8A8_UNORM_to_FLOAT4(vertices[2].Color).xyz);
 
-	attrib.Emissive =
+	attrib.Emissive = min16float(
 		baryWeights[0] * vertices[0].Emissive +
 		baryWeights[1] * vertices[1].Emissive +
-		baryWeights[2] * vertices[2].Emissive;
+		baryWeights[2] * vertices[2].Emissive);
 
 	return attrib;
 }
@@ -141,25 +156,28 @@ Attrib interpAttrib(uint meshIdx, Vertex vertices[3], float2 barycentrics)
 Attrib GetPixelAttrib(uint2 index, float2 uv, matrix viewProj)
 {
 	const uint visibility = g_txVisibility[index];
-	float2 screenPos = uv * 2.0 - 1.0;
-	screenPos.y = -screenPos.y; // Invert Y for Y-up-style NDC.
 
 	Attrib attrib;
 	if (visibility > 0)
 	{
 		// Decode visibility
-		const Visibility vis = DecodeVisibility(visibility);
+		const Visibility vis = decodeVisibility(visibility);
 
 		// Fetch vertices
 		Vertex vertices[3];
 		getVertices(vertices, vis.MeshId, vis.PrimId);
 
 		// Calculate barycentrics
+		float2 screenPos = uv * 2.0 - 1.0;
+		screenPos.y = -screenPos.y; // Invert Y for Y-up-style NDC.
+
+		const float4x3 world = g_matrices[vis.MeshId].World;
+
 		float4 p[3];
 		[unroll]
 		for (uint i = 0; i < 3; ++i)
 		{
-			p[i].xyz = mul(float4(vertices[i].Pos, 1.0), g_matrices[vis.MeshId].World);
+			p[i].xyz = mul(float4(vertices[i].Pos, 1.0), world);
 			p[i].w = 1.0;
 			p[i] = mul(p[i], viewProj);
 		}
@@ -173,6 +191,39 @@ Attrib GetPixelAttrib(uint2 index, float2 uv, matrix viewProj)
 		attrib = (Attrib)0;
 		attrib.MeshId = 0xffffffff;
 	}
+
+	return attrib;
+}
+
+Attrib GetTexelAttrib(float2 uv, uint meshId, uint primId)
+{
+	// Fetch vertices
+	Vertex vertices[3];
+	getVertices(vertices, meshId, primId);
+
+	// Calculate barycentrics
+	float2 screenPos = uv * 2.0 - 1.0;
+	screenPos.y = -screenPos.y; // Invert Y for Y-up-style NDC.
+
+	float4 p[3];
+	[unroll]
+	for (uint i = 0; i < 3; ++i)
+	{
+		p[i].xy = vertices[i].UV1 * 2.0 - 1.0;
+		p[i].y = -p[i].y; // Invert Y for Y-up-style NDC.
+		p[i].zw = float2(0.0, 1.0);
+	}
+	const float2 barycentrics = calcBarycentrics(p, screenPos);
+
+	Attrib attrib;
+	if (any(barycentrics < 0.0) || any(barycentrics > 1.0))
+	{
+		attrib = (Attrib)0;
+		attrib.MeshId = 0xffffffff;
+	}
+	else
+		// Interpolate triangle sample attributes
+		attrib = interpAttrib(meshId, vertices, barycentrics);
 
 	return attrib;
 }

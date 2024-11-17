@@ -93,6 +93,15 @@
     <ClInclude Include="Common\cgltf.h">
       <Filter>Common\Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Common\stb_image.h">
+      <Filter>Common\Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Common\xatlas.h">
+      <Filter>Common\Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Common\tinyjson.hpp">
+      <Filter>Common\Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp">
@@ -115,6 +124,12 @@
     </ClCompile>
     <ClCompile Include="XUSG\Optional\XUSGGltfLoader.cpp">
       <Filter>XUSG\Optional</Filter>
+    </ClCompile>
+    <ClCompile Include="Common\xatlas.cpp">
+      <Filter>Common\Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Common\stb_image_write.cpp">
+      <Filter>Common\Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -140,6 +155,9 @@
       <Filter>Shaders</Filter>
     </FxCompile>
     <FxCompile Include="Content\Shaders\CSUpdateSDF.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Content\Shaders\PSVisibilityA.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
   </ItemGroup>

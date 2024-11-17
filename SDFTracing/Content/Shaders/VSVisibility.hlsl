@@ -7,6 +7,12 @@
 //--------------------------------------------------------------------------------------
 // Structures
 //--------------------------------------------------------------------------------------
+struct VSOut
+{
+	float4 Pos	: SV_POSITION;
+	float2 UV	: TEXCOORD;
+};
+
 struct PerObject
 {
 	float4x3 World;
@@ -23,20 +29,25 @@ cbuffer cbPerObject
 
 cbuffer cbPerFrame
 {
-	float4x4 g_viewProj;
+	matrix g_viewProj;
 };
 
 //--------------------------------------------------------------------------------------
 // Buffers
 //--------------------------------------------------------------------------------------
-StructuredBuffer<PerObject> g_matrices;
-StructuredBuffer<Vertex> g_vertexBuffers[];
+StructuredBuffer<PerObject> g_matrices		: register (t0, space0);
+StructuredBuffer<Vertex> g_vertexBuffers[]	: register (t0, space1);
 
-float4 main(uint vid : SV_VERTEXID) : SV_POSITION
+VSOut main(uint vid : SV_VERTEXID)
 {
+	VSOut output;
+
 	const Vertex vertex = g_vertexBuffers[g_meshId][vid];
 	float4 pos = float4(vertex.Pos, 1.0);
 	pos.xyz = mul(pos, g_matrices[g_meshId].World);
 
-	return mul(pos, g_viewProj);
+	output.Pos = mul(pos, g_viewProj);
+	output.UV = vertex.UV0;
+
+	return output;
 }

@@ -88,7 +88,7 @@ private:
 	DirectX::XMFLOAT2 m_mousePt;
 
 	// User external settings
-	std::vector<Renderer::MeshDesc> m_meshDescs;
+	//std::vector<Renderer::MeshDesc> m_meshDescs;
 
 	// Screen-shot helpers and state
 	XUSG::Buffer::uptr	m_readBuffer;

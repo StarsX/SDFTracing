@@ -70,7 +70,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 	if (needUpdate)
 	{
-		lastHitMesh = DecodeVisibility(lastHitMesh).MeshId;
+		lastHitMesh = decodeVisibility(lastHitMesh).MeshId;
 		needUpdate = g_dynamicMeshIds[lastHitMesh] != 0xffffffff;
 		isLastHitStatic = !needUpdate;
 	}

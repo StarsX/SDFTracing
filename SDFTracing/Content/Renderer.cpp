@@ -6,6 +6,7 @@
 #include "SharedConst.h"
 
 using namespace std;
+using namespace tiny;
 using namespace DirectX;
 using namespace XUSG;
 using namespace XUSG::RayTracing;
@@ -42,8 +43,18 @@ struct LightSource
 
 Renderer::Renderer() :
 	m_instances(),
+	m_textures(1),
 	m_frameIndex(0)
 {
+	m_sceneDesc.Meshes =
+	{
+		{ "Assets/bunny_uv.gltf", XMFLOAT4(-1.6f, 0.0f, -0.5f, 0.3f), 256, true, true },
+		{ "Assets/cornell_box.gltf", XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f), 1024, false, true }
+	};
+	m_sceneDesc.Name = "CornellBox";
+	m_sceneDesc.AmbientBottom = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+	m_sceneDesc.AmbientTop = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+
 	m_shaderLib = ShaderLib::MakeUnique();
 }
 
@@ -52,63 +63,111 @@ Renderer::~Renderer()
 }
 
 bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::uptr>& uploaders,
-	uint32_t meshCount, GeometryBuffer* pGeometries, const MeshDesc* pMeshDescs)
+	TinyJson& sceneReader, vector<GeometryBuffer>& geometries)
 {
 	const auto pDevice = pCommandList->GetRTDevice();
 
-	// Load inputs
-	m_meshes.resize(meshCount);
-	vector<uint32_t> dynamicMeshIds(meshCount);
+	// Load scene
 	vector<GltfLoader::LightSource> lightSources(0);
+	loadScene(sceneReader, lightSources);
+
+	// create a null texture for place holder
+	m_textures[0] = Texture::MakeUnique();
+	const uint16_t srvComponentMapping = XUSG_ENCODE_SRV_COMPONENT_MAPPING(SrvCM::FV1, SrvCM::FV1, SrvCM::FV1, SrvCM::FV1);
+	XUSG_N_RETURN(m_textures[0]->Create(pCommandList->GetDevice(), 1, 1, Format::R8G8B8A8_UNORM,
+		1, ResourceFlag::NONE, 1, 1, false, MemoryFlag::NONE, L"NullTexture", srvComponentMapping), false);
+
+	// Load mesh inputs
+	vector<uint32_t> dynamicMeshIds(0);
 	m_dynamicMeshes.clear();
-	XMVECTOR sceneAABB[2], meshAABB[2];
-	sceneAABB[0] = XMVectorReplicate(FLT_MAX);
-	sceneAABB[1] = XMVectorReplicate(-FLT_MAX);
-	for (auto i = 0u; i < meshCount; ++i)
+	const auto meshDescCount = static_cast<uint32_t>(m_sceneDesc.Meshes.size());
+	for (auto i = 0u; i < meshDescCount; ++i)
 	{
-		loadMesh(pCommandList, i, uploaders, pMeshDescs, dynamicMeshIds, lightSources);
+		const auto startMeshId = static_cast<uint32_t>(m_meshes.size());
+		loadMesh(pCommandList, m_sceneDesc.Meshes[i], dynamicMeshIds, uploaders, lightSources);
 
-		calcMeshWorldAABB(meshAABB, i);
-		sceneAABB[0] = XMVectorMin(meshAABB[0], sceneAABB[0]);
-		sceneAABB[1] = XMVectorMax(meshAABB[1], sceneAABB[1]);
+		for (auto j = 0u; j < m_meshes[startMeshId].MeshRes->NumSubsets; ++j)
+		{
+			const auto meshId = startMeshId + j;
+			auto& mesh = m_meshes[meshId];
+
+			mesh.PrimitiveIdMap = RenderTarget::MakeUnique();
+			XUSG_N_RETURN(mesh.PrimitiveIdMap->Create(pDevice, mesh.LightMapWidth, mesh.LightMapHeight,
+				Format::R32_UINT, 1, ResourceFlag::NONE, 1, 1, nullptr, false, MemoryFlag::NONE,
+				(L"Mesh" + to_wstring(meshId) + L".PrimitiveIdMap").c_str()), false);
+		}
 	}
-
-	// Calculate volume world matrix
-	XMFLOAT3 volumeExt;
-	const auto volumeCenter = (sceneAABB[0] + sceneAABB[1]) * 0.5f;
-	XMStoreFloat3(&volumeExt, (sceneAABB[1] - sceneAABB[0]) * 0.5f);
-	const auto radius = (max)((max)(volumeExt.x, volumeExt.y), volumeExt.z) * 1.08f;
-	const auto volumeWorld = XMMatrixScaling(radius, radius, radius) *
-		XMMatrixTranslationFromVector(volumeCenter);
-	XMStoreFloat3x4(&m_volumeWorld, volumeWorld);
 
 	// Create constant buffers
 	XUSG_N_RETURN(createCBs(pDevice), false);
 
 	// Create buffers
-	const auto lightSourceCount = static_cast<uint32_t>(lightSources.size());
-	assert(lightSourceCount == m_lightSourceMeshIds.size());
-	if (lightSourceCount > 0)
-	{
-		for (auto& lightSourceBuffer : m_lightSources)
-		{
-			lightSourceBuffer = StructuredBuffer::MakeUnique();
-			XUSG_N_RETURN(lightSourceBuffer->Create(pDevice, lightSourceCount, sizeof(LightSource), ResourceFlag::NONE,
-				MemoryType::UPLOAD, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"LightSources"), false); // MemoryType::UPLOAD  CPU 
-
-			for (auto i = 0u; i < lightSourceCount; ++i)
-			{
-				const auto pData = static_cast<GltfLoader::LightSource*>(lightSourceBuffer->Map());
-				*pData = lightSources[i];
-			}
-		}
-	}
-
+	// Matrices
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 	for (auto& matrices : m_matrices)
 	{
 		matrices = StructuredBuffer::MakeUnique();
 		XUSG_N_RETURN(matrices->Create(pDevice, meshCount, sizeof(PerObject), ResourceFlag::NONE,
 			MemoryType::UPLOAD, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"Matrices"), false);
+	}
+
+	// Light sources
+	const auto lightSourceCount = static_cast<uint32_t>(lightSources.size());
+	assert(lightSourceCount == m_lightSourceMeshIds.size());
+	for (auto& lightSourceBuffer : m_lightSources)
+	{
+		lightSourceBuffer = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(lightSourceBuffer->Create(pDevice, lightSourceCount, sizeof(LightSource), ResourceFlag::NONE,
+			MemoryType::UPLOAD, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"LightSources"), false); // MemoryType::UPLOAD CPU
+
+		for (auto i = 0u; i < lightSourceCount; ++i)
+		{
+			const auto pData = static_cast<GltfLoader::LightSource*>(lightSourceBuffer->Map());
+			*pData = lightSources[i];
+		}
+	}
+
+	// Mesh AABBs
+	{
+		m_meshAABBs = StructuredBuffer::MakeUnique();
+		XUSG_N_RETURN(m_meshAABBs->Create(pDevice, meshCount, sizeof(AABB), ResourceFlag::NONE,
+			MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"MeshAABBs"), false);
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		vector<AABB> aabbs(meshCount);
+		for (auto i = 0u; i < meshCount; ++i)
+		{
+			aabbs[i].Min = m_meshes[i].MeshRes->AABBMin;
+			aabbs[i].Max = m_meshes[i].MeshRes->AABBMax;
+		}
+
+		XUSG_N_RETURN(m_meshAABBs->Upload(pCommandList->AsCommandList(),
+			uploaders.back().get(), aabbs.data(), sizeof(AABB) * meshCount), false);
+	}
+
+	// For dynamic meshes
+	const auto dynamicMeshCount = static_cast<uint32_t>(m_dynamicMeshes.size());
+	{
+		// Allocate dynamic mesh buffer
+		m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
+		XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, dynamicMeshCount, sizeof(DynamicMesh),
+			ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE,
+			L"DynamicMeshes"), false); // create dynamic meshes GPU
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+			m_dynamicMeshes.data(), sizeof(DynamicMesh) * dynamicMeshCount), false);
+	}
+
+	{
+		m_dynamicMeshIds = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
+		XUSG_N_RETURN(m_dynamicMeshIds->Create(pDevice, meshCount, sizeof(uint32_t),
+			ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE,
+			L"DynamicMeshIds"), false); // create dynamic meshes GPU
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		XUSG_N_RETURN(m_dynamicMeshIds->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+			dynamicMeshIds.data(), sizeof(uint32_t) * meshCount), false);
 	}
 
 	m_globalSDF = Texture3D::MakeUnique();
@@ -124,61 +183,38 @@ bool Renderer::Init(RayTracing::EZ::CommandList* pCommandList, vector<Resource::
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, MemoryFlag::NONE, L"BarycentricsVolume"), false);
 
 	const uint32_t gridSize = GRID_SIZE;
-	const auto mipCount = CalculateMipLevels(gridSize, gridSize, gridSize);
+	const auto mipCount = Texture::CalculateMipLevels(gridSize, gridSize, gridSize);
 	m_irradiance = Texture3D::MakeUnique();
 	XUSG_N_RETURN(m_irradiance->Create(pDevice, gridSize, gridSize, gridSize, Format::R16G16B16A16_FLOAT,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, mipCount, MemoryFlag::NONE, L"IrradianceVolume"), false);
 
-	{
-		m_meshAABBs = StructuredBuffer::MakeUnique();
-		XUSG_N_RETURN(m_meshAABBs->Create(pDevice, meshCount, sizeof(AABB), ResourceFlag::NONE,
-			MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE, L"MeshAABBs"), false);
-		uploaders.emplace_back(Resource::MakeUnique());
+	// Compute scene AABB
+	computeSceneAABB();
 
-		vector<AABB> aabbs(meshCount);
-		for (auto i = 0u; i < meshCount; ++i)
-		{
-			aabbs[i].Min = m_meshes[i].MinAABB;
-			aabbs[i].Max = m_meshes[i].MaxAABB;
-		}
+	// Calculate volume world matrix
+	XMFLOAT3 volumeExt;
+	const auto sceneAABBMin = XMLoadFloat3(&m_sceneAABBMin);
+	const auto sceneAABBMax = XMLoadFloat3(&m_sceneAABBMax);
+	const auto volumeCenter = (sceneAABBMin + sceneAABBMax) * 0.5f;
+	XMStoreFloat3(&volumeExt, (sceneAABBMax - sceneAABBMin) * 0.5f);
+	const auto radius = (max)((max)(volumeExt.x, volumeExt.y), volumeExt.z) * 1.08f;
+	const auto volumeWorld = XMMatrixScaling(radius, radius, radius) *
+		XMMatrixTranslationFromVector(volumeCenter);
+	XMStoreFloat3x4(&m_volumeWorld, volumeWorld);
 
-		XUSG_N_RETURN(m_meshAABBs->Upload(pCommandList->AsCommandList(),
-			uploaders.back().get(), aabbs.data(), sizeof(AABB) * meshCount), false);
-	}
+	// Build acceleration structures
+	XUSG_N_RETURN(buildAccelerationStructures(pCommandList, geometries), false);
 
-	// For dynamic meshes
-	{
-		// Allocate dynamic mesh buffer
-		m_dynamicMeshList = StructuredBuffer::MakeUnique(); // create buffer, upload to GPU
-		XUSG_N_RETURN(m_dynamicMeshList->Create(pDevice, static_cast<uint32_t>(m_dynamicMeshes.size()),
-			sizeof(DynamicMesh), ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr,
-			MemoryFlag::NONE, L"DynamicMeshes"), false); // create dynamic meshes GPU
-		uploaders.emplace_back(Resource::MakeUnique());
+	const uint32_t maxSrvSpaces[Shader::Stage::NUM_STAGE] = { 4, 2, 0, 0, 0, 3 };
+	XUSG_N_RETURN(pCommandList->CreatePipelineLayouts(nullptr, nullptr, nullptr, nullptr, nullptr, maxSrvSpaces), false);
 
-		XUSG_N_RETURN(m_dynamicMeshList->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
-			m_dynamicMeshes.data(), m_dynamicMeshes.size() * sizeof(DynamicMesh)), false);
-	}
-
-	{
-		m_dynamicMeshIds = StructuredBuffer::MakeUnique();
-		XUSG_N_RETURN(m_dynamicMeshIds->Create(pDevice, meshCount, sizeof(uint32_t),
-			ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 0, nullptr, MemoryFlag::NONE,
-			L"DynamicMeshIds"), false);
-		uploaders.emplace_back(Resource::MakeUnique());
-
-		XUSG_N_RETURN(m_dynamicMeshIds->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
-			dynamicMeshIds.data(), sizeof(uint32_t) * meshCount), false);
-	}
-
-	// Build acceleration structures and create shaders
-	XUSG_N_RETURN(buildAccelerationStructures(pCommandList, pGeometries), false);
-	XUSG_N_RETURN(createShaders(), false);
-
-	return true;
+	// Create shaders
+	return createShaders();
 }
 
-bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t height)
+bool Renderer::SetViewport(XUSG::EZ::CommandList* pCommandList, uint32_t width, uint32_t height)
 {
+	const auto pDevice = pCommandList->GetDevice();
 	m_viewport.x = width;
 	m_viewport.y = height;
 
@@ -191,7 +227,7 @@ bool Renderer::SetViewport(const XUSG::Device* pDevice, uint32_t width, uint32_t
 	XUSG_N_RETURN(m_outputView->Create(pDevice, width, height, Format::R8G8B8A8_UNORM, 1,
 		ResourceFlag::ALLOW_UNORDERED_ACCESS, 1, 1, false, MemoryFlag::NONE, L"OutputView"), false);
 
-	return true;
+	return createDescriptorTables(pCommandList);
 }
 
 void Renderer::UpdateFrame(double time, uint8_t frameIndex, CXMVECTOR eyePt, CXMMATRIX viewProj)
@@ -252,69 +288,104 @@ void Renderer::Render(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIn
 	antiAlias(pCommandList, pRenderTarget);
 }
 
-bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders,
-	const MeshDesc* pMeshDescs, vector<uint32_t>& dynamicMeshIds, vector<GltfLoader::LightSource>& lightSources)
+bool Renderer::loadMesh(XUSG::EZ::CommandList* pCommandList, const MeshDesc& meshDesc, vector<uint32_t>& dynamicMeshIds,
+	vector<Resource::uptr>& uploaders, vector<GltfLoader::LightSource>& lightSources)
 {
 	GltfLoader loader;
-	if (!loader.Import(pMeshDescs[meshId].FileName.c_str(), true, true, true, true)) return false;
+	if (!loader.Import(meshDesc.FileName.c_str(), true, true, true, meshDesc.InvertZ)) return false;
+
+	const auto startMeshId = static_cast<uint32_t>(m_meshes.size());
+	const auto numSubSets = loader.GetNumSubSets();
+	m_meshes.resize(startMeshId + numSubSets);
+	dynamicMeshIds.resize(startMeshId + numSubSets);
+
+	auto meshRes = make_shared<MeshResource>();
+	meshRes->PosScale = meshDesc.PosScale;
+	meshRes->Rot = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+
+	const auto aabb = loader.GetAABB();
+	meshRes->AABBMin = XMFLOAT3(aabb.Min.x, aabb.Min.y, aabb.Min.z);
+	meshRes->AABBMax = XMFLOAT3(aabb.Max.x, aabb.Max.y, aabb.Max.z);
+
+	meshRes->NumSubsets = numSubSets;
+	meshRes->StartMeshId = startMeshId;
+	meshRes->IsDynamic = meshDesc.IsDynamic;
+
+	string fileName = meshDesc.FileName;
+	for (size_t found = fileName.find('\\'); found != string::npos; found = fileName.find('\\', found + 1))
+		fileName.replace(found, 1, "/");
+	const auto nameStart = fileName.rfind('/') + 1;
+	meshRes->Name = fileName.substr(nameStart, fileName.find(".gltf") - nameStart);
+
+	const auto texIdxOffset = static_cast<uint32_t>(m_textures.size());
+	const auto pSubsets = loader.GetSubsets();
+	for (auto i = 0u; i < numSubSets; ++i)
+	{
+		const auto meshId = startMeshId + i;
+		XUSG_N_RETURN(createMeshCB(pCommandList, meshId, uploaders), false);
+		m_meshes[meshId].MeshRes = meshRes;
+		m_meshes[meshId].IndexOffset = pSubsets[i].IndexOffset;
+		m_meshes[meshId].NumIndices = pSubsets[i].NumIndices;
+		m_meshes[meshId].BaseColorTexIdx = pSubsets[i].BaseColorTexIdx != UINT32_MAX ? texIdxOffset + pSubsets[i].BaseColorTexIdx : 0;
+		m_meshes[meshId].NormalTexIdx = pSubsets[i].NormalTexIdx != UINT32_MAX ? texIdxOffset + pSubsets[i].NormalTexIdx : 0;
+		m_meshes[meshId].AlphaMode = static_cast<AlphaMode>(pSubsets[i].AlphaMode);
+
+		if (meshDesc.IsDynamic)
+		{
+			// !!! isDynamic bool variable, set bunny true
+			dynamicMeshIds[meshId] = static_cast<uint32_t>(m_dynamicMeshes.size());
+			m_dynamicMeshes.push_back({ meshId });
+		}
+		else dynamicMeshIds[meshId] = UINT32_MAX;
+
+		m_meshes[meshId].LightMapWidth = (min)(static_cast<uint32_t>(meshDesc.LightMapSize * pSubsets[i].LightMapScl.x), 1024u);
+		m_meshes[meshId].LightMapHeight = (min)(static_cast<uint32_t>(meshDesc.LightMapSize * pSubsets[i].LightMapScl.y), 1024u);
+	}
+
+	XUSG_N_RETURN(createMeshVB(pCommandList, *meshRes, loader.GetNumVertices(), loader.GetVertexStride(), loader.GetVertices(), uploaders), false);
+	XUSG_N_RETURN(createMeshIB(pCommandList, *meshRes, loader.GetNumIndices(), loader.GetIndices(), &m_meshes[startMeshId], numSubSets, uploaders), false);
+	XUSG_N_RETURN(createMeshTextures(pCommandList, loader.GetTextures(), loader.GetNumTextures(), uploaders), false);
 
 	const auto meshLightSources = loader.GetLightSources();
 	lightSources.insert(lightSources.end(), meshLightSources.cbegin(), meshLightSources.cend());
-	for (const auto& meshLightSource : meshLightSources)
-		m_lightSourceMeshIds.emplace_back(meshId);
-
-	XUSG_N_RETURN(createMeshVB(pCommandList, meshId, loader.GetNumVertices(), loader.GetVertexStride(), loader.GetVertices(), uploaders), false);
-	XUSG_N_RETURN(createMeshIB(pCommandList, meshId, loader.GetNumIndices(), loader.GetIndices(), uploaders), false);
-	XUSG_N_RETURN(createMeshCB(pCommandList, meshId, uploaders), false);
-
-	m_meshes[meshId].PosScale = pMeshDescs[meshId].PosScale;
-
-	const auto aabb = loader.GetAABB();
-	m_meshes[meshId].MinAABB = XMFLOAT3(aabb.Min.x, aabb.Min.y, aabb.Min.z);
-	m_meshes[meshId].MaxAABB = XMFLOAT3(aabb.Max.x, aabb.Max.y, aabb.Max.z);
-
-	if (pMeshDescs[meshId].IsDynamic)
-	{
-		// !!! isDynamic bool variable, set bunny true
-		dynamicMeshIds[meshId] = static_cast<uint32_t>(m_dynamicMeshes.size());
-		m_dynamicMeshes.push_back({ meshId });
-	}
-	else dynamicMeshIds[meshId] = UINT32_MAX;
-
-	m_meshes[meshId].Name = pMeshDescs[meshId].FileName.substr(0, pMeshDescs[meshId].FileName.find(".gltf"));
-	m_meshes[meshId].IsDynamic = pMeshDescs[meshId].IsDynamic;
+	for (const auto& meshLightSource : meshLightSources) m_lightSourceMeshIds.emplace_back(startMeshId);
 
 	return true;
 }
 
-bool Renderer::createMeshVB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, uint32_t numVert,
+bool Renderer::createMeshVB(XUSG::EZ::CommandList* pCommandList, MeshResource& meshRes, uint32_t numVert,
 	uint32_t stride, const uint8_t* pData, vector<Resource::uptr>& uploaders)
 {
-	m_meshes[meshId].VertexBuffer = VertexBuffer::MakeUnique();
+	meshRes.VertexBuffer = VertexBuffer::MakeUnique();
 
-	XUSG_N_RETURN(m_meshes[meshId].VertexBuffer->Create(pCommandList->GetDevice(), numVert, stride,
-		ResourceFlag::NONE, MemoryType::DEFAULT), false);
+	XUSG_N_RETURN(meshRes.VertexBuffer->Create(pCommandList->GetDevice(), numVert, stride,
+		ResourceFlag::NONE, MemoryType::DEFAULT, 1, nullptr, 1, nullptr, 0), false);
 	uploaders.emplace_back(Resource::MakeUnique());//!!!
 
-	return m_meshes[meshId].VertexBuffer->Upload(pCommandList->AsCommandList(),
+	return meshRes.VertexBuffer->Upload(pCommandList->AsCommandList(),
 		uploaders.back().get(), pData, stride * numVert);
 }
 
-bool Renderer::createMeshIB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, uint32_t numIndices,
-	const uint32_t* pData, vector<Resource::uptr>& uploaders)
+bool Renderer::createMeshIB(XUSG::EZ::CommandList* pCommandList, MeshResource& meshRes, uint32_t numIndices,
+	const uint32_t* pData, const MeshSubset* pSubsets, uint32_t numSubsets, vector<Resource::uptr>& uploaders)
 {
-	const uint32_t byteWidth = sizeof(uint32_t) * numIndices;
-	m_meshes[meshId].IndexBuffer = IndexBuffer::MakeUnique();
-	m_meshes[meshId].NumIndices = numIndices;
+	vector<uintptr_t> offsets(numSubsets);
+	vector<uintptr_t> firstElements(numSubsets);
+	for (auto i = 0u; i < numSubsets; ++i)
+	{
+		offsets[i] = sizeof(uint32_t) * pSubsets[i].IndexOffset;
+		firstElements[i] = pSubsets[i].IndexOffset;
+	}
 
-	XUSG_N_RETURN(m_meshes[meshId].IndexBuffer->Create(pCommandList->GetDevice(), byteWidth, Format::R32_UINT,
-		ResourceFlag::NONE, MemoryType::DEFAULT), false);
+	const uint32_t byteWidth = sizeof(uint32_t) * numIndices;
+	meshRes.IndexBuffer = IndexBuffer::MakeUnique();
+
+	XUSG_N_RETURN(meshRes.IndexBuffer->Create(pCommandList->GetDevice(), byteWidth, Format::R32_UINT,
+		ResourceFlag::NONE, MemoryType::DEFAULT, numSubsets, offsets.data(),
+		numSubsets, firstElements.data(), 0), false);
 	uploaders.emplace_back(Resource::MakeUnique());
 
-	return m_meshes[meshId].IndexBuffer->Upload(pCommandList->AsCommandList(),
-		uploaders.back().get(), pData, byteWidth);
-
-	return true;
+	return meshRes.IndexBuffer->Upload(pCommandList->AsCommandList(), uploaders.back().get(), pData, byteWidth);
 }
 
 bool Renderer::createMeshCB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId, vector<Resource::uptr>& uploaders)
@@ -326,6 +397,42 @@ bool Renderer::createMeshCB(XUSG::EZ::CommandList* pCommandList, uint32_t meshId
 
 	return m_meshes[meshId].CbPerObject->Upload(pCommandList->AsCommandList(),
 		uploaders.back().get(), &meshId, sizeof(meshId));
+}
+
+bool Renderer::createMeshTextures(XUSG::EZ::CommandList* pCommandList, const GltfLoader::Texture* pTextures,
+	uint32_t numTextures, std::vector<XUSG::Resource::uptr>& uploaders)
+{
+	const auto texIdxOffset = static_cast<uint32_t>(m_textures.size());
+	m_textures.resize(texIdxOffset + numTextures);
+	for (auto i = 0u; i < numTextures; ++i)
+	{
+		Format format;
+		switch (pTextures[i].Channels)
+		{
+		case 1:
+			format = Format::R8_UNORM;
+			break;
+		case 2:
+			format = Format::R8G8_UNORM;
+			break;
+		case 4:
+			format = Format::R8G8B8A8_UNORM;
+			break;
+		default:
+			assert(!"Wrong channels, unknown format!");
+		}
+
+		const auto j = texIdxOffset + i;
+		m_textures[j] = Texture::MakeUnique();
+		XUSG_N_RETURN(m_textures[j]->Create(pCommandList->GetDevice(), pTextures[i].Width, pTextures[i].Height,
+			format, 1, ResourceFlag::ALLOW_UNORDERED_ACCESS, 0, 1, false, MemoryFlag::NONE), false);
+		uploaders.emplace_back(Resource::MakeUnique());
+
+		XUSG_N_RETURN(m_textures[j]->Upload(pCommandList->AsCommandList(), uploaders.back().get(),
+			pTextures[i].Data.data(), pTextures[i].Channels), false);
+	}
+
+	return true;
 }
 
 bool Renderer::createCBs(const XUSG::Device* pDevice)
@@ -363,55 +470,248 @@ bool Renderer::createShaders()
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSVisibility.cso"), false);
 	m_shaders[PS_VISIBILITY] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
+	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSVisibilityA.cso"), false);
+	m_shaders[PS_VISIBILITY_A] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
+
 	XUSG_N_RETURN(m_shaderLib->CreateShader(Shader::Stage::PS, psIndex, L"PSFXAA.cso"), false);
 	m_shaders[PS_FXAA] = m_shaderLib->GetShader(Shader::Stage::PS, psIndex++);
 
 	return true;
 }
 
-bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommandList, GeometryBuffer* pGeometries)
+bool Renderer::createDescriptorTables(XUSG::EZ::CommandList* pCommandList)
 {
-	//AccelerationStructure::SetFrameCount(1); // In-place update
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
-	for (auto i = 0u; i < meshCount; ++i)
-	{
-		// Set geometry
-		auto vbv = XUSG::EZ::GetVBV(m_meshes[i].VertexBuffer.get());
-		auto ibv = XUSG::EZ::GetIBV(m_meshes[i].IndexBuffer.get());
-		pCommandList->SetTriangleGeometries(pGeometries[i], 1, Format::R32G32B32_FLOAT, &vbv, &ibv);
+	const auto pDescriptorTableLib = pCommandList->GetDescriptorTableLib();
+	vector<Descriptor> descriptors(meshCount);
 
-		// Prebuild and allocate BLAS
-		m_meshes[i].BottomLevelAS = BottomLevelAS::MakeUnique();
-		XUSG_N_RETURN(pCommandList->PrebuildBLAS(m_meshes[i].BottomLevelAS.get(), 1, pGeometries[i]), false);
-		XUSG_N_RETURN(pCommandList->AllocateAccelerationStructure(m_meshes[i].BottomLevelAS.get()), false);
+	// Index buffer SRVs
+	{
+		for (auto i = 0u; i < meshCount; ++i) descriptors[i] = m_meshes[i].MeshRes->IndexBuffer->GetSRV(i - m_meshes[i].MeshRes->StartMeshId);
+		const auto descriptorTable = Util::DescriptorTable::MakeUnique();
+		descriptorTable->SetDescriptors(0, static_cast<uint32_t>(descriptors.size()), descriptors.data());
+		XUSG_X_RETURN(m_srvTables[SRV_TABLE_IB], descriptorTable->GetCbvSrvUavTable(pDescriptorTableLib), false);
 	}
+
+	// Vertex buffer SRVs
+	{
+		for (auto i = 0u; i < meshCount; ++i) descriptors[i] = m_meshes[i].MeshRes->VertexBuffer->GetSRV();
+		const auto descriptorTable = Util::DescriptorTable::MakeUnique();
+		descriptorTable->SetDescriptors(0, static_cast<uint32_t>(descriptors.size()), descriptors.data());
+		XUSG_X_RETURN(m_srvTables[SRV_TABLE_VB], descriptorTable->GetCbvSrvUavTable(pDescriptorTableLib), false);
+	}
+
+	// Base-color texture SRVs
+	{
+		for (auto i = 0u; i < meshCount; ++i) descriptors[i] = m_textures[m_meshes[i].BaseColorTexIdx]->GetSRV();
+		const auto descriptorTable = Util::DescriptorTable::MakeUnique();
+		descriptorTable->SetDescriptors(0, static_cast<uint32_t>(descriptors.size()), descriptors.data());
+		XUSG_X_RETURN(m_srvTables[SRV_TABLE_BC], descriptorTable->GetCbvSrvUavTable(pDescriptorTableLib), false);
+	}
+
+	// Normal texture SRVs
+	{
+		for (auto i = 0u; i < meshCount; ++i) descriptors[i] = m_textures[m_meshes[i].NormalTexIdx]->GetSRV();
+		const auto descriptorTable = Util::DescriptorTable::MakeUnique();
+		descriptorTable->SetDescriptors(0, static_cast<uint32_t>(descriptors.size()), descriptors.data());
+		XUSG_X_RETURN(m_srvTables[SRV_TABLE_NM], descriptorTable->GetCbvSrvUavTable(pDescriptorTableLib), false);
+	}
+
+	return true;
+}
+
+bool Renderer::buildAccelerationStructures(RayTracing::EZ::CommandList* pCommandList, vector<GeometryBuffer>& geometries)
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+	const auto asCount = 1 + meshCount;
+
+	vector<uintptr_t> dstBufferFirstElements(asCount);
+	vector<uintptr_t> dstBufferOffsets(asCount);
+	size_t dstBufferSize = 0;
 
 	// Prebuild and allocate TLAS
-	m_topLevelAS = TopLevelAS::MakeUnique();
-	XUSG_N_RETURN(pCommandList->PrebuildTLAS(m_topLevelAS.get(), meshCount, BuildFlag::ALLOW_UPDATE | BuildFlag::PREFER_FAST_TRACE), false);
-	XUSG_N_RETURN(pCommandList->AllocateAccelerationStructure(m_topLevelAS.get()), false);
+	{
+		m_topLevelAS = TopLevelAS::MakeUnique();
+		XUSG_N_RETURN(pCommandList->PrebuildTLAS(m_topLevelAS.get(), meshCount, BuildFlag::ALLOW_UPDATE | BuildFlag::PREFER_FAST_TRACE), false);
+		dstBufferFirstElements[0] = dstBufferSize / sizeof(uint32_t);
+		dstBufferOffsets[0] = dstBufferSize;
+		dstBufferSize += m_topLevelAS->GetResultDataMaxByteSize();
+	}
 
-	// Set instance
-	vector<XMFLOAT3X4> matrices(meshCount);
-	vector<float*> pTransforms(meshCount);
-	vector<const BottomLevelAS*> pBottomLevelASs(meshCount);
+	geometries.resize(meshCount);
 	for (auto i = 0u; i < meshCount; ++i)
 	{
+		auto& mesh = m_meshes[i];
+		const auto pMeshRes = mesh.MeshRes.get();
+
+		// Set geometry
+		auto vbv = XUSG::EZ::GetVBV(pMeshRes->VertexBuffer.get());
+		auto ibv = XUSG::EZ::GetIBV(pMeshRes->IndexBuffer.get(), i - pMeshRes->StartMeshId);
+		const auto geometryFlag = mesh.AlphaMode == ALPHA_OPAQUE ? GeometryFlag::FULL_OPAQUE : GeometryFlag::NONE;
+		pCommandList->SetTriangleGeometries(geometries[i], 1, Format::R32G32B32_FLOAT, &vbv, &ibv, &geometryFlag);
+
+		// Prebuild and allocate BLAS
+		mesh.BottomLevelAS = BottomLevelAS::MakeUnique();
+		XUSG_N_RETURN(pCommandList->PrebuildBLAS(mesh.BottomLevelAS.get(), 1, geometries[i]), false);
+		const auto j = i + 1;
+		dstBufferFirstElements[j] = dstBufferSize / sizeof(uint32_t);
+		dstBufferOffsets[j] = dstBufferSize;
+		dstBufferSize += mesh.BottomLevelAS->GetResultDataMaxByteSize();
+	}
+
+	// Create buffer storage
+	Buffer::sptr dstBuffer = Buffer::MakeShared();
+	XUSG_N_RETURN(AccelerationStructure::AllocateDestBuffer(pCommandList->GetRTDevice(), dstBuffer.get(),
+		dstBufferSize, 1, dstBufferFirstElements.data(), asCount, dstBufferFirstElements.data()), false);
+
+	// Set TLAS destination
+	pCommandList->SetTLASDestination(m_topLevelAS.get(), dstBuffer, dstBufferOffsets[0], 0, 0);
+
+	// Set BLAS destinations and instances for TLAS
+	vector<XMFLOAT3X4> matrices(meshCount);
+	vector<float*> pTransforms(meshCount);
+	vector<const BottomLevelAS*> pBottomLevelASes(meshCount);
+	for (auto i = 0u; i < meshCount; ++i)
+	{
+		const auto j = i + 1;
+		pCommandList->SetBLASDestination(m_meshes[i].BottomLevelAS.get(), dstBuffer, dstBufferOffsets[j], j);
+
 		XMStoreFloat3x4(&matrices[i], getWorldMatrix(i));
 		pTransforms[i] = reinterpret_cast<float*>(&matrices[i]);
-		pBottomLevelASs[i] = m_meshes[i].BottomLevelAS.get();
+		pBottomLevelASes[i] = m_meshes[i].BottomLevelAS.get();
 	}
-	for (auto& instances : m_instances) instances = Resource::MakeUnique();
-	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances->get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
+	for (auto& instances : m_instances) instances = Buffer::MakeUnique();
+	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances->get(), meshCount, pBottomLevelASes.data(), pTransforms.data());
 
-	// Build bottom level ASs
-	for (auto i = 0u; i < meshCount; ++i)
-		pCommandList->BuildBLAS(m_meshes[i].BottomLevelAS.get());
+	// Build BLASes
+	for (auto i = 0u; i < meshCount; ++i) pCommandList->BuildBLAS(m_meshes[i].BottomLevelAS.get());
 
-	// Build top level AS
+	// Build TLAS
 	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances->get());
 
 	return true;
+}
+
+void Renderer::loadScene(TinyJson& sceneReader, vector<GltfLoader::LightSource>& lightSources)
+{
+	float vecData[4];
+	m_sceneDesc.Name = sceneReader.Get<string>("Name");
+	auto meshes = sceneReader.Get<xarray>("Meshes");
+	const auto meshCount = static_cast<uint32_t>(meshes.Count());
+	m_sceneDesc.Meshes.resize(meshCount);
+	for (auto i = 0u; i < meshCount; ++i)
+	{
+		if (meshes.Enter(i))
+		{
+			m_sceneDesc.Meshes[i].FileName = meshes.Get<string>("FileName");
+
+			auto pos = meshes.Get<xarray>("Position");
+			assert(pos.Count() == 3);
+			for (uint8_t j = 0; j < 3; ++j) if (pos.Enter(j)) vecData[j] = pos.Get<float>();
+			m_sceneDesc.Meshes[i].PosScale.x = vecData[0];
+			m_sceneDesc.Meshes[i].PosScale.y = vecData[1];
+			m_sceneDesc.Meshes[i].PosScale.z = vecData[2];
+			m_sceneDesc.Meshes[i].PosScale.w = meshes.Get<float>("Scaling");
+
+			m_sceneDesc.Meshes[i].LightMapSize = meshes.Get<uint32_t>("LightMapSize");
+			m_sceneDesc.Meshes[i].IsDynamic = meshes.Get<bool>("IsDynamic");
+			m_sceneDesc.Meshes[i].InvertZ = meshes.Get<bool>("InvertZ");
+		}
+	}
+
+	auto ambientBottom = sceneReader.Get<xarray>("AmbientBottom");
+	if (ambientBottom.Count() == 3)
+	{
+		for (uint8_t i = 0; i < 3; ++i) if (ambientBottom.Enter(i)) vecData[i] = ambientBottom.Get<float>();
+		m_sceneDesc.AmbientBottom.x = vecData[0];
+		m_sceneDesc.AmbientBottom.y = vecData[1];
+		m_sceneDesc.AmbientBottom.z = vecData[2];
+		m_sceneDesc.AmbientBottom.w = 1.0f;
+	}
+
+	auto ambientTop = sceneReader.Get<xarray>("AmbientTop");
+	if (ambientBottom.Count() == 3)
+	{
+		for (uint8_t i = 0; i < 3; ++i) if (ambientTop.Enter(i)) vecData[i] = ambientTop.Get<float>();
+		m_sceneDesc.AmbientTop.x = vecData[0];
+		m_sceneDesc.AmbientTop.y = vecData[1];
+		m_sceneDesc.AmbientTop.z = vecData[2];
+		m_sceneDesc.AmbientTop.w = 1.0f;
+	}
+
+	auto lightSrcs = sceneReader.Get<xarray>("LightSources");
+	const auto lightSrcCount = static_cast<uint32_t>(lightSrcs.Count());
+	for (auto i = 0u; i < lightSrcCount; ++i)
+	{
+		if (lightSrcs.Enter(i))
+		{
+			lightSources.emplace_back();
+			auto& lightSource = lightSources.back();
+
+			auto aabbMin = lightSrcs.Get<xarray>("AABBMin");
+			assert(aabbMin.Count() == 3);
+			for (uint8_t j = 0; j < 3; ++j) if (aabbMin.Enter(j)) vecData[j] = aabbMin.Get<float>();
+			lightSource.Min.x = vecData[0];
+			lightSource.Min.y = vecData[1];
+			lightSource.Min.z = vecData[2];
+			lightSource.Min.w = lightSrcs.Get<float>("AABBScaling");
+
+			auto aabbMax = lightSrcs.Get<xarray>("AABBMax");
+			assert(aabbMax.Count() == 3);
+			for (uint8_t j = 0; j < 3; ++j) if (aabbMax.Enter(j)) vecData[j] = aabbMax.Get<float>();
+			lightSource.Max.x = vecData[0];
+			lightSource.Max.y = vecData[1];
+			lightSource.Max.z = vecData[2];
+			lightSource.Max.w = 1.0f;
+
+			auto emissive = lightSrcs.Get<xarray>("Emissive");
+			assert(emissive.Count() == 4);
+			for (uint8_t j = 0; j < 4; ++j) if (emissive.Enter(j)) vecData[j] = emissive.Get<float>();
+			lightSource.Emissive.x = vecData[0];
+			lightSource.Emissive.y = vecData[1];
+			lightSource.Emissive.z = vecData[2];
+			lightSource.Emissive.w = vecData[3];
+
+			m_lightSourceMeshIds.emplace_back(UINT32_MAX);
+		}
+	}
+}
+
+void Renderer::computeSceneAABB()
+{
+	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
+
+	auto sceneMin = XMVectorReplicate(FLT_MAX);
+	auto sceneMax = XMVectorReplicate(-FLT_MAX);
+
+	for (auto i = 0u; i < meshCount; ++i)
+	{
+		const auto pMeshRes = m_meshes[i].MeshRes.get();
+
+		if (pMeshRes->IsDynamic) continue;
+		else if (i != pMeshRes->StartMeshId) continue;
+
+		XMVECTOR aabbVertices[8];
+		aabbVertices[0] = XMVectorSet(pMeshRes->AABBMin.x, pMeshRes->AABBMin.y, pMeshRes->AABBMin.z, 1.0f);
+		aabbVertices[1] = XMVectorSet(pMeshRes->AABBMin.x, pMeshRes->AABBMin.y, pMeshRes->AABBMax.z, 1.0f);
+		aabbVertices[2] = XMVectorSet(pMeshRes->AABBMin.x, pMeshRes->AABBMax.y, pMeshRes->AABBMin.z, 1.0f);
+		aabbVertices[3] = XMVectorSet(pMeshRes->AABBMin.x, pMeshRes->AABBMax.y, pMeshRes->AABBMax.z, 1.0f);
+		aabbVertices[4] = XMVectorSet(pMeshRes->AABBMax.x, pMeshRes->AABBMin.y, pMeshRes->AABBMin.z, 1.0f);
+		aabbVertices[5] = XMVectorSet(pMeshRes->AABBMax.x, pMeshRes->AABBMin.y, pMeshRes->AABBMax.z, 1.0f);
+		aabbVertices[6] = XMVectorSet(pMeshRes->AABBMax.x, pMeshRes->AABBMax.y, pMeshRes->AABBMin.z, 1.0f);
+		aabbVertices[7] = XMVectorSet(pMeshRes->AABBMax.x, pMeshRes->AABBMax.y, pMeshRes->AABBMax.z, 1.0f);
+
+		const auto world = getWorldMatrix(i);
+		for (auto& vertex : aabbVertices)
+		{
+			vertex = XMVector3Transform(vertex, world);
+			sceneMin = XMVectorMin(vertex, sceneMin);
+			sceneMax = XMVectorMax(vertex, sceneMax);
+		}
+	}
+
+	XMStoreFloat3(&m_sceneAABBMin, sceneMin);
+	XMStoreFloat3(&m_sceneAABBMax, sceneMax);
 }
 
 void Renderer::buildSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t frameIndex)
@@ -435,8 +735,17 @@ void Renderer::buildSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t frame
 	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::CBV, 0, 1, &cbv);
 
 	// Set SRV
-	const auto srv = RayTracing::EZ::GetSRV(m_topLevelAS.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, 1, &srv);
+	const XUSG::EZ::ResourceView srvs[] =
+	{
+		RayTracing::EZ::GetSRV(m_topLevelAS.get()),
+		XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
+		XUSG::EZ::GetSRV(m_dynamicMeshIds.get()),
+		XUSG::EZ::GetSRV(m_dynamicMeshList.get()),
+		XUSG::EZ::GetSRV(m_meshAABBs.get())
+	};
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
+	//auto srv = RayTracing::EZ::GetSRV(m_topLevelAS.get());
+	//pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, 1, &srv);
 
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
 }
@@ -482,14 +791,14 @@ void Renderer::updateAccelerationStructures(RayTracing::EZ::CommandList* pComman
 	// Set instance
 	static vector<XMFLOAT3X4> matrices(meshCount);
 	static vector<float*> pTransforms(meshCount);
-	static vector<const BottomLevelAS*> pBottomLevelASs(meshCount);
+	static vector<const BottomLevelAS*> pBottomLevelASes(meshCount);
 	for (auto i = 0u; i < meshCount; ++i)
 	{
 		XMStoreFloat3x4(&matrices[i], getWorldMatrix(i));
 		pTransforms[i] = reinterpret_cast<float*>(&matrices[i]);
-		pBottomLevelASs[i] = m_meshes[i].BottomLevelAS.get();
+		pBottomLevelASes[i] = m_meshes[i].BottomLevelAS.get();
 	}
-	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances[frameIndex].get(), meshCount, pBottomLevelASs.data(), pTransforms.data());
+	TopLevelAS::SetInstances(pCommandList->GetRTDevice(), m_instances[frameIndex].get(), meshCount, pBottomLevelASes.data(), pTransforms.data());
 
 	// Update top level AS
 	pCommandList->BuildTLAS(m_topLevelAS.get(), m_instances[frameIndex].get(), m_topLevelAS.get());
@@ -499,11 +808,9 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 {
 	const auto meshCount = static_cast<uint32_t>(m_meshes.size());
 
-	// Set pipeline state
+	// set pipeline state
 	pCommandList->SetGraphicsShader(Shader::Stage::VS, m_shaders[VS_VISIBILITY]);
-	pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_VISIBILITY]);
 	pCommandList->DSSetState(Graphics::DepthStencilPreset::DEFAULT_LESS);
-	pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
 	pCommandList->OMSetBlendState(Graphics::BlendPreset::DEFAULT_OPAQUE);
 
 	// Set render target
@@ -524,9 +831,15 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 	const auto srv = XUSG::EZ::GetSRV(m_matrices[frameIndex].get());
 	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 0, 1, &srv);
 
-	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
-	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::VS, DescriptorType::SRV, 1, meshCount, srvs.data());
+	// Set vertex buffers
+	pCommandList->SetGraphicsDescriptorTable(Shader::Stage::VS, DescriptorType::SRV, m_srvTables[SRV_TABLE_VB], 1);
+
+	// Set base-color textures for alpha test
+	pCommandList->SetGraphicsDescriptorTable(Shader::Stage::PS, DescriptorType::SRV, m_srvTables[SRV_TABLE_BC], 0);
+
+	// Set sampler
+	const auto sampler = SamplerPreset::ANISOTROPIC_WRAP;
+	pCommandList->SetSamplerStates(Shader::Stage::PS, 0, 1, &sampler);
 
 	// Set viewport
 	const Viewport viewport(0.0f, 0.0f, static_cast<float>(m_viewport.x), static_cast<float>(m_viewport.y));
@@ -539,17 +852,31 @@ void Renderer::visibility(XUSG::EZ::CommandList* pCommandList, uint8_t frameInde
 
 	for (auto i = 0u; i < meshCount; ++i)
 	{
+		const auto& mesh = m_meshes[i];
+		const auto pMeshRes = mesh.MeshRes.get();
+
+		if (mesh.AlphaMode != ALPHA_OPAQUE)
+		{
+			pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_VISIBILITY_A]);
+			pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_NONE);
+		}
+		else
+		{
+			pCommandList->RSSetState(Graphics::RasterizerPreset::CULL_BACK);
+			pCommandList->SetGraphicsShader(Shader::Stage::PS, m_shaders[PS_VISIBILITY]);
+		}
+
 		// Set IA
-		const auto ibv = XUSG::EZ::GetIBV(m_meshes[i].IndexBuffer.get());
+		const auto ibv = XUSG::EZ::GetIBV(pMeshRes->IndexBuffer.get(), i - pMeshRes->StartMeshId);
 		pCommandList->IASetIndexBuffer(ibv);
 
 		// Set per-object CBVs
-		cbvs[0] = XUSG::EZ::GetCBV(m_meshes[i].CbPerObject.get());
+		cbvs[0] = XUSG::EZ::GetCBV(mesh.CbPerObject.get());
 		pCommandList->SetResources(Shader::Stage::VS, DescriptorType::CBV, 0, static_cast<uint32_t>(size(cbvs)), cbvs);
 		pCommandList->SetResources(Shader::Stage::PS, DescriptorType::CBV, 0, 1, cbvs);
 
 		// Draw command
-		pCommandList->DrawIndexed(m_meshes[i].NumIndices, 1, 0, 0, 0);
+		pCommandList->DrawIndexed(mesh.NumIndices, 1, 0, 0, 0);
 	}
 }
 
@@ -583,13 +910,9 @@ void Renderer::renderVolume(XUSG::EZ::CommandList* pCommandList, uint8_t frameIn
 
 	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
 
-	// Set index buffers
-	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].IndexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
-
-	// Set vertex buffers
-	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+	// Set index buffers and vertex buffers
+	pCommandList->SetComputeDescriptorTable(DescriptorType::SRV, m_srvTables[SRV_TABLE_IB], 1);
+	pCommandList->SetComputeDescriptorTable(DescriptorType::SRV, m_srvTables[SRV_TABLE_VB], 2);
 
 	// Set sampler
 	const auto sampler = SamplerPreset::LINEAR_CLAMP;
@@ -628,13 +951,9 @@ void Renderer::render(XUSG::EZ::CommandList* pCommandList, uint8_t frameIndex)
 	
 	static vector<XUSG::EZ::ResourceView> srvs(meshCount);
 
-	// Set index buffers
-	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].IndexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 1);
-
-	// Set vertex buffers
-	for (auto i = 0u; i < meshCount; ++i) srvs[i] = XUSG::EZ::GetSRV(m_meshes[i].VertexBuffer.get());
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, meshCount, srvs.data(), 2);
+	// Set index buffers and vertex buffers
+	pCommandList->SetComputeDescriptorTable(DescriptorType::SRV, m_srvTables[SRV_TABLE_IB], 1);
+	pCommandList->SetComputeDescriptorTable(DescriptorType::SRV, m_srvTables[SRV_TABLE_VB], 2);
 
 	// Set sampler
 	const auto sampler = SamplerPreset::LINEAR_CLAMP;
@@ -682,28 +1001,25 @@ void Renderer::antiAlias(XUSG::EZ::CommandList* pCommandList, RenderTarget* pRen
 	pCommandList->Draw(3, 1, 0, 0);
 }
 
-void Renderer::calcMeshWorldAABB(XMVECTOR pAABB[2], uint32_t meshId) const
-{
-	pAABB[0] = XMLoadFloat3(&m_meshes[meshId].MinAABB);
-	pAABB[1] = XMLoadFloat3(&m_meshes[meshId].MaxAABB);
-
-	const auto world = getWorldMatrix(meshId);
-	pAABB[0] = XMVector3TransformCoord(pAABB[0], world);
-	pAABB[1] = XMVector3TransformCoord(pAABB[1], world);
-}
-
 FXMMATRIX Renderer::getWorldMatrix(uint32_t meshId) const
 {
-	const auto& posScale = m_meshes[meshId].PosScale;
+	if (meshId == UINT32_MAX) return XMMatrixIdentity();
+
+	const auto& pMeshRes = m_meshes[meshId].MeshRes.get();
+	const auto& posScale = pMeshRes->PosScale;
 	const auto scl = XMMatrixScaling(posScale.w, posScale.w, posScale.w);
 	const auto tsl = XMMatrixTranslation(posScale.x, posScale.y, posScale.z);
 
-	if (m_meshes[meshId].IsDynamic)
+	XMVECTOR q;
+	if (pMeshRes->IsDynamic)
 	{
-		const auto rot = XMMatrixRotationY(static_cast<float>((m_time - m_timeStart) * 0.5) + meshId);
-
-		return scl * rot * tsl;
+		const auto angle = static_cast<float>((m_time - m_timeStart) * 0.5) + meshId;
+		q = XMQuaternionRotationAxis(XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), angle);
+		XMStoreFloat4(&pMeshRes->Rot, q);
 	}
+	else q = XMLoadFloat4(&pMeshRes->Rot);
 
-	return scl * tsl;
+	const auto rot = XMMatrixRotationQuaternion(q);
+
+	return scl * rot * tsl;
 }

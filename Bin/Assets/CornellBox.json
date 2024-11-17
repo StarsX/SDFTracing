@@ -1,0 +1,25 @@
+// Scene
+{
+  "Name": "CornellBox",
+  "Meshes": [
+    {
+      "FileName": "Assets/bunny_uv.gltf",
+      "Position": [ -1.6, 0.0, -0.5 ],
+      "Scaling": 0.3,
+      "LightMapSize": 256,
+      "IsDynamic": "true",
+      "InvertZ": "true"
+    },
+    {
+      "FileName": "Assets/cornell_box.gltf",
+      "Position": [ 0.0, 0.0, 0.0 ],
+      "Scaling": 1.0,
+      "LightMapSize": 1024,
+      "IsDynamic": "false",
+      "InvertZ": "true"
+    }
+  ],
+
+  "CameraPosition": [ 8.0, 12.0, -16.0 ],
+  "CameraFocus": [ 0.0, 4.5, 0.0 ]
+}
