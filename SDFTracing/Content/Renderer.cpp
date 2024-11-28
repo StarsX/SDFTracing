@@ -735,17 +735,8 @@ void Renderer::buildSDF(RayTracing::EZ::CommandList* pCommandList, uint8_t frame
 	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::CBV, 0, 1, &cbv);
 
 	// Set SRV
-	const XUSG::EZ::ResourceView srvs[] =
-	{
-		RayTracing::EZ::GetSRV(m_topLevelAS.get()),
-		XUSG::EZ::GetSRV(m_matrices[frameIndex].get()),
-		XUSG::EZ::GetSRV(m_dynamicMeshIds.get()),
-		XUSG::EZ::GetSRV(m_dynamicMeshList.get()),
-		XUSG::EZ::GetSRV(m_meshAABBs.get())
-	};
-	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, static_cast<uint32_t>(size(srvs)), srvs);
-	//auto srv = RayTracing::EZ::GetSRV(m_topLevelAS.get());
-	//pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, 1, &srv);
+	const auto srv = RayTracing::EZ::GetSRV(m_topLevelAS.get());
+	pCommandList->SetResources(Shader::Stage::CS, DescriptorType::SRV, 0, 1, &srv);
 
 	pCommandList->Dispatch(XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4), XUSG_DIV_UP(GRID_SIZE, 4));
 }
